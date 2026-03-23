@@ -52,6 +52,7 @@ cd /Users/maixinchao/Documents/New\ project/courseweb-cli
 ```
 
 The installer creates both `courseweb` and `cw`.
+It also updates your shell profile so new terminals can resolve `cw` directly.
 
 Quick sanity check:
 

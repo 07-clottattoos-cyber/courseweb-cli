@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="${HOME}/.local/bin:${PATH}"
 COURSEWEB_BIN="${COURSEWEB_BIN:-cw}"
 
 run() {
