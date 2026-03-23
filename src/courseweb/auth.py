@@ -86,8 +86,30 @@ def login_with_playwright(
             page.goto(login_url, wait_until="domcontentloaded", timeout=timeout_ms)
             page.wait_for_url(re.compile(r"https://iaaa\.pku\.edu\.cn/iaaa/oauth\.jsp"), timeout=timeout_ms)
 
-            page.get_by_placeholder("学号/职工号/手机号").fill(credentials.username)
-            page.get_by_placeholder("密码").fill(credentials.password)
+            _fill_first_available(
+                page,
+                selectors=[
+                    "#user_name",
+                    'input[name="userName"]',
+                    'input[placeholder="学号/职工号/手机号"]',
+                    'input[placeholder="User ID / PKU Email / Cell Phone"]',
+                ],
+                value=credentials.username,
+                timeout_ms=timeout_ms,
+                field_label="username",
+            )
+            _fill_first_available(
+                page,
+                selectors=[
+                    "#password",
+                    'input[name="password"]',
+                    'input[placeholder="密码"]',
+                    'input[placeholder="Password"]',
+                ],
+                value=credentials.password,
+                timeout_ms=timeout_ms,
+                field_label="password",
+            )
             page.locator("#logon_button").click()
 
             page.wait_for_url(PORTAL_URL_RE, timeout=timeout_ms)
@@ -112,6 +134,18 @@ def login_with_playwright(
         raise AuthError(f"Timed out during browser login: {exc}") from exc
     except Exception as exc:  # pragma: no cover - used for operational errors
         raise AuthError(f"Browser login failed: {exc}") from exc
+
+
+def _fill_first_available(page, *, selectors: list[str], value: str, timeout_ms: int, field_label: str) -> None:
+    for selector in selectors:
+        locator = page.locator(selector).first
+        try:
+            locator.wait_for(state="visible", timeout=min(timeout_ms, 10000))
+        except PlaywrightTimeoutError:
+            continue
+        locator.fill(value)
+        return
+    raise AuthError(f"Could not find the {field_label} field on the login page.")
 
 
 def _extract_user_display(page) -> str | None:

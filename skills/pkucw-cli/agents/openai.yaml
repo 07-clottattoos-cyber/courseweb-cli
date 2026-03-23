@@ -1,0 +1,7 @@
+interface:
+  display_name: "PKU Course CLI"
+  short_description: "Safe PKU teaching-site workflows through pkucw."
+  default_prompt: "Use $pkucw-cli to inspect PKU teaching-site courses safely through the pkucw CLI."
+
+policy:
+  allow_implicit_invocation: true
