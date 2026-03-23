@@ -14,7 +14,15 @@ from .assignments import (
 )
 from .auth import AuthError, DEFAULT_LOGIN_URL, load_credentials, login_with_playwright
 from .contents import ContentItem, ContentScrapeError, download_content, resolve_content, scrape_contents
-from .courses import CourseInfo, CourseRecord, CourseScrapeError, resolve_course, scrape_course_info, scrape_courses
+from .courses import (
+    CourseInfo,
+    CourseRecord,
+    CourseScrapeError,
+    resolve_course,
+    scrape_course_info,
+    scrape_courses,
+    suggest_courses,
+)
 from .models import CommandResult, SessionState
 from .output import render_payload
 from .recordings import (
@@ -50,7 +58,13 @@ def main(argv: list[str] | None = None) -> int:
 
     result = args.handler(args)
     data = result.to_dict()
-    print(render_payload(data, as_json=getattr(args, "json", False)))
+    print(
+        render_payload(
+            data,
+            as_json=getattr(args, "json", False),
+            color=getattr(args, "color", "auto"),
+        )
+    )
     return 0 if result.ok else 1
 
 
@@ -61,18 +75,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Render command output as JSON.",
     )
+    shared_parser.add_argument(
+        "--color",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="Colorize human-readable output.",
+    )
 
     parser = argparse.ArgumentParser(
         prog="pkucw",
-        description="PKU teaching-site CLI with browser-backed workflows.",
+        description="CLI for PKU course.pku.edu.cn with browser-backed workflows.",
         epilog=(
-            "Examples:\n"
+            "Common flows:\n"
             "  pkucw login\n"
             "  pkucw ls --current\n"
             "  pkucw use \"有机化学 (一)\"\n"
-            "  pkucw recordings list\n"
+            "  pkucw announcements list\n"
             "  pkucw recordings latest --output ./downloads/latest\n"
-            "  pkucw assignments list\n"
+            "\nAliases: cw, courseweb\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[shared_parser],
@@ -83,7 +103,10 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
 
-    subparsers = parser.add_subparsers(dest="domain")
+    subparsers = parser.add_subparsers(
+        dest="domain",
+        metavar="{completion,auth,login,logout,status,courses,ls,use,current,doctor,course,info,announcements,contents,assignments,recordings}",
+    )
 
     add_completion_parsers(subparsers, shared_parser)
     add_auth_parsers(subparsers, shared_parser)
@@ -115,6 +138,9 @@ def add_completion_parsers(
     )
     complete_parser.add_argument("words", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     complete_parser.set_defaults(handler=handle_completion_candidates)
+    subparsers._choices_actions = [
+        action for action in subparsers._choices_actions if action.dest != "__complete"
+    ]
 
 
 def add_auth_parsers(
@@ -770,14 +796,7 @@ def handle_courses_show(args: argparse.Namespace) -> CommandResult:
 
     course = resolve_course(courses, args.course)
     if course is None:
-        return CommandResult(
-            ok=False,
-            message=f"Could not resolve course: {args.course}",
-            payload={
-                "query": args.course,
-                "available_course_count": len(courses),
-            },
-        )
+        return _course_resolution_error(courses, args.course)
 
     return CommandResult(
         ok=True,
@@ -1678,14 +1697,7 @@ def _resolve_course_from_query(
 
     course = resolve_course(courses, effective_query)
     if course is None:
-        return None, CommandResult(
-            ok=False,
-            message=f"Could not resolve course: {effective_query}",
-            payload={
-                "query": effective_query,
-                "available_course_count": len(courses),
-            },
-        )
+        return None, _course_resolution_error(courses, effective_query)
     return course, None
 
 
@@ -1694,6 +1706,26 @@ def _set_active_course(session: SessionState, course: CourseRecord):
     session.active_course_title = course.title
     session.updated_at = utc_now_iso()
     return save_session(session)
+
+
+def _course_resolution_error(courses: list[CourseRecord], query: str) -> CommandResult:
+    suggestions = suggest_courses(courses, query, limit=5)
+    payload = {
+        "query": query,
+        "available_course_count": len(courses),
+    }
+    if suggestions:
+        payload["suggestions"] = [course.to_dict() for course in suggestions]
+        return CommandResult(
+            ok=False,
+            message=f"Could not resolve course: {query}. Try one of the suggested matches.",
+            payload=payload,
+        )
+    return CommandResult(
+        ok=False,
+        message=f"Could not resolve course: {query}",
+        payload=payload,
+    )
 
 
 def _resolve_content_from_query(
@@ -1783,7 +1815,7 @@ def _complete_words(
     parser: argparse.ArgumentParser,
     words: list[str],
 ) -> list[str]:
-    current_parser, prefix = _resolve_completion_context(parser, words)
+    current_parser, prefix, consumed_positionals = _resolve_completion_context(parser, words)
     suggestions: list[str] = []
 
     subparsers = _get_subparsers(current_parser)
@@ -1792,6 +1824,7 @@ def _complete_words(
     else:
         if subparsers is not None:
             suggestions.extend(subparsers.choices.keys())
+        suggestions.extend(_dynamic_completion_candidates(current_parser, consumed_positionals))
         suggestions.extend(_collect_option_strings(current_parser))
 
     filtered = [item for item in suggestions if item.startswith(prefix)]
@@ -1801,21 +1834,23 @@ def _complete_words(
 def _resolve_completion_context(
     parser: argparse.ArgumentParser,
     words: list[str],
-) -> tuple[argparse.ArgumentParser, str]:
+) -> tuple[argparse.ArgumentParser, str, list[str]]:
     current_parser = parser
     tokens = list(words)
     prefix = tokens[-1] if tokens else ""
     consumed = tokens[:-1] if tokens else []
+    consumed_positionals: list[str] = []
 
     for token in consumed:
         if not token or token.startswith("-"):
             continue
         subparsers = _get_subparsers(current_parser)
         if subparsers is None or token not in subparsers.choices:
+            consumed_positionals.append(token)
             continue
         current_parser = subparsers.choices[token]
 
-    return current_parser, prefix
+    return current_parser, prefix, consumed_positionals
 
 
 def _get_subparsers(
@@ -1832,3 +1867,48 @@ def _collect_option_strings(parser: argparse.ArgumentParser) -> list[str]:
     for action in parser._actions:
         options.extend(action.option_strings)
     return [item for item in options if item]
+
+
+def _dynamic_completion_candidates(
+    parser: argparse.ArgumentParser,
+    consumed_positionals: list[str],
+) -> list[str]:
+    next_dest = _next_positional_dest(parser, consumed_positionals)
+    if next_dest == "course":
+        return _course_completion_candidates()
+    return []
+
+
+def _next_positional_dest(parser: argparse.ArgumentParser, consumed_positionals: list[str]) -> str | None:
+    positionals = [
+        action
+        for action in parser._actions
+        if not action.option_strings and not isinstance(action, argparse._SubParsersAction)
+    ]
+    if not positionals:
+        return None
+
+    index = min(len(consumed_positionals), len(positionals) - 1)
+    return positionals[index].dest
+
+
+def _course_completion_candidates() -> list[str]:
+    session = load_session()
+    suggestions: list[str] = []
+    if session.active_course_title:
+        suggestions.append(session.active_course_title)
+    if session.active_course_id:
+        suggestions.append(session.active_course_id)
+
+    if session.configured and session.authenticated and session.storage_state:
+        try:
+            courses = scrape_courses(storage_state_path=session.storage_state, headless=True, timeout_ms=15000)
+        except CourseScrapeError:
+            courses = []
+        for course in courses:
+            suggestions.append(course.name)
+            suggestions.append(course.title)
+            if course.id:
+                suggestions.append(course.id)
+
+    return [item for item in dict.fromkeys(suggestions) if item]

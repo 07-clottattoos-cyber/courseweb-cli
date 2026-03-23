@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import re
 import time
 from dataclasses import dataclass
@@ -13,6 +14,36 @@ from playwright.sync_api import sync_playwright
 PORTAL_HOME_URL = "https://course.pku.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1"
 COURSE_KEY_RE = re.compile(r"key=(_\d+_1)")
 TERM_RE = re.compile(r"\(([^()]*(?:学年第\d学期|学年第[12]学期))\)")
+NORMALIZE_RE = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
+NUMERAL_TRANSLATION = str.maketrans(
+    {
+        "零": "0",
+        "〇": "0",
+        "一": "1",
+        "二": "2",
+        "三": "3",
+        "四": "4",
+        "五": "5",
+        "六": "6",
+        "七": "7",
+        "八": "8",
+        "九": "9",
+        "十": "10",
+        "壹": "1",
+        "贰": "2",
+        "貳": "2",
+        "叁": "3",
+        "參": "3",
+        "肆": "4",
+        "伍": "5",
+        "陆": "6",
+        "陸": "6",
+        "柒": "7",
+        "捌": "8",
+        "玖": "9",
+        "拾": "10",
+    }
+)
 RETRYABLE_ERROR_SNIPPETS = (
     "ERR_CONNECTION_CLOSED",
     "ERR_CONNECTION_RESET",
@@ -241,24 +272,29 @@ def _is_retryable_error(error: Exception) -> bool:
 
 
 def resolve_course(courses: list[CourseRecord], needle: str) -> CourseRecord | None:
+    matches = resolve_course_matches(courses, needle, limit=1)
+    return matches[0] if matches else None
+
+
+def resolve_course_matches(courses: list[CourseRecord], needle: str, *, limit: int = 5) -> list[CourseRecord]:
     raw = needle.strip().lower()
     if not raw:
-        return None
+        return []
 
-    exact = [course for course in courses if raw in _candidate_tokens(course)]
-    if exact:
-        return exact[0]
+    normalized_query = _normalize_lookup(raw)
+    scored: list[tuple[float, CourseRecord]] = []
+    for course in courses:
+        score = _course_match_score(course, raw, normalized_query)
+        if score <= 0:
+            continue
+        scored.append((score, course))
 
-    partial = [
-        course
-        for course in courses
-        if raw in course.title.lower()
-        or raw in course.name.lower()
-        or (course.id and raw in course.id.lower())
-    ]
-    if partial:
-        return partial[0]
-    return None
+    scored.sort(key=lambda item: (-item[0], item[1].status != "current", item[1].name))
+    return [course for _, course in scored[:limit]]
+
+
+def suggest_courses(courses: list[CourseRecord], needle: str, *, limit: int = 5) -> list[CourseRecord]:
+    return resolve_course_matches(courses, needle, limit=limit)
 
 
 def _candidate_tokens(course: CourseRecord) -> set[str]:
@@ -267,7 +303,41 @@ def _candidate_tokens(course: CourseRecord) -> set[str]:
         values.add(course.id.lower())
     if course.term:
         values.add(course.term.lower())
+    normalized_values = {_normalize_lookup(value) for value in values if value}
+    values.update(token for token in normalized_values if token)
     return values
+
+
+def _course_match_score(course: CourseRecord, raw_query: str, normalized_query: str) -> float:
+    best = 0.0
+    candidates = _candidate_tokens(course)
+    for value in candidates:
+        if not value:
+            continue
+        normalized_value = _normalize_lookup(value)
+        if raw_query == value or (normalized_query and normalized_query == normalized_value):
+            best = max(best, 100.0)
+            continue
+        if value.startswith(raw_query) or (normalized_query and normalized_value.startswith(normalized_query)):
+            best = max(best, 92.0)
+            continue
+        if raw_query in value or (normalized_query and normalized_query in normalized_value):
+            best = max(best, 84.0)
+            continue
+
+        ratio = difflib.SequenceMatcher(None, normalized_query or raw_query, normalized_value or value).ratio()
+        if ratio >= 0.72:
+            best = max(best, 60.0 + ratio * 20.0)
+
+    if course.status == "current":
+        best += 0.5
+    return best
+
+
+def _normalize_lookup(value: str) -> str:
+    lowered = value.strip().lower()
+    lowered = lowered.translate(NUMERAL_TRANSLATION)
+    return NORMALIZE_RE.sub("", lowered)
 
 
 def _normalize_course(item: dict[str, str], *, status: str) -> CourseRecord:
