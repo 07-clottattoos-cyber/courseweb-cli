@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from . import __version__
 from .announcements import AnnouncementScrapeError, resolve_announcement, scrape_announcements
 from .assignments import (
     AssignmentScrapeError,
@@ -69,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[shared_parser],
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
 
     subparsers = parser.add_subparsers(dest="domain")

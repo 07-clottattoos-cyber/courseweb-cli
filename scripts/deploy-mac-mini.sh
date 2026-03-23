@@ -19,4 +19,4 @@ tar \
   chmod +x ./install.sh ./scripts/deploy-mac-mini.sh && \
   ./install.sh"
 
-ssh "${REMOTE_HOST}" "~/.local/bin/cw --help >/dev/null && ~/.local/bin/cw doctor"
+ssh "${REMOTE_HOST}" "cd ~/${REMOTE_DIR} && chmod +x ./scripts/smoke-test.sh && ./scripts/smoke-test.sh"
