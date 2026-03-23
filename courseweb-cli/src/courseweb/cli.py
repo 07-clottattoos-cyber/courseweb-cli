@@ -42,6 +42,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
+    if getattr(args, "domain", None) == "__complete":
+        candidates = _complete_words(build_parser(), getattr(args, "words", []))
+        if candidates:
+            print("\n".join(candidates))
+        return 0
+
     result = args.handler(args)
     data = result.to_dict()
     print(render_payload(data, as_json=getattr(args, "json", False)))
@@ -57,16 +63,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser = argparse.ArgumentParser(
-        prog="courseweb",
+        prog="pkucw",
         description="PKU teaching-site CLI with browser-backed workflows.",
         epilog=(
             "Examples:\n"
-            "  cw login\n"
-            "  cw ls --current\n"
-            "  cw use \"有机化学 (一)\"\n"
-            "  cw recordings list\n"
-            "  cw recordings latest --output ./downloads/latest\n"
-            "  cw assignments list\n"
+            "  pkucw login\n"
+            "  pkucw ls --current\n"
+            "  pkucw use \"有机化学 (一)\"\n"
+            "  pkucw recordings list\n"
+            "  pkucw recordings latest --output ./downloads/latest\n"
+            "  pkucw assignments list\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[shared_parser],
@@ -79,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="domain")
 
+    add_completion_parsers(subparsers, shared_parser)
     add_auth_parsers(subparsers, shared_parser)
     add_auth_shortcuts(subparsers, shared_parser)
     add_courses_parsers(subparsers, shared_parser)
@@ -87,6 +94,27 @@ def build_parser() -> argparse.ArgumentParser:
     add_top_level_course_resource_parsers(subparsers, shared_parser)
 
     return parser
+
+
+def add_completion_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    shared_parser: argparse.ArgumentParser,
+) -> None:
+    completion_parser = subparsers.add_parser(
+        "completion",
+        help="Print shell completion setup code.",
+        parents=[shared_parser],
+    )
+    completion_parser.add_argument("shell", choices=["bash", "zsh", "fish"], help="Shell name.")
+    completion_parser.set_defaults(handler=handle_completion_script)
+
+    complete_parser = subparsers.add_parser(
+        "__complete",
+        help=argparse.SUPPRESS,
+        parents=[shared_parser],
+    )
+    complete_parser.add_argument("words", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+    complete_parser.set_defaults(handler=handle_completion_candidates)
 
 
 def add_auth_parsers(
@@ -626,7 +654,7 @@ def handle_current_course(args: argparse.Namespace) -> CommandResult:
     if not session.active_course_id and not session.active_course_title:
         return CommandResult(
             ok=False,
-            message="No active course is set. Run `cw use <course>` first.",
+            message="No active course is set. Run `pkucw use <course>` first.",
             payload={"session": session.to_dict()},
         )
 
@@ -660,6 +688,7 @@ def handle_doctor(args: argparse.Namespace) -> CommandResult:
         message="Collected local CLI diagnostics.",
         payload={
             "installed_commands": {
+                "pkucw": True,
                 "courseweb": True,
                 "cw": True,
             },
@@ -667,12 +696,29 @@ def handle_doctor(args: argparse.Namespace) -> CommandResult:
             "storage_state_path": str(storage_state_path()),
             "session": session.to_dict(),
             "recommended_flow": [
-                "cw login",
-                "cw ls --current",
-                "cw use <course>",
-                "cw recordings latest",
+                "pkucw login",
+                "pkucw ls --current",
+                "pkucw use <course>",
+                "pkucw recordings latest",
             ],
         },
+    )
+
+
+def handle_completion_script(args: argparse.Namespace) -> CommandResult:
+    return CommandResult(
+        ok=True,
+        message=_build_completion_script(args.shell),
+        payload={},
+    )
+
+
+def handle_completion_candidates(args: argparse.Namespace) -> CommandResult:
+    candidates = _complete_words(build_parser(), args.words)
+    return CommandResult(
+        ok=True,
+        message="\n".join(candidates),
+        payload={},
     )
 
 
@@ -1623,7 +1669,7 @@ def _resolve_course_from_query(
     if not effective_query:
         return None, CommandResult(
             ok=False,
-            message="No course was provided and no active course is set. Run `cw use <course>` first.",
+            message="No course was provided and no active course is set. Run `pkucw use <course>` first.",
             payload={
                 "available_course_count": len(courses),
                 "session": session.to_dict(),
@@ -1689,10 +1735,100 @@ def _require_authenticated_session(session: SessionState) -> CommandResult | Non
     if not session.configured or not session.authenticated or not session.storage_state:
         return CommandResult(
             ok=False,
-            message="No authenticated session is available. Run `courseweb auth login` first.",
+            message="No authenticated session is available. Run `pkucw login` first.",
             payload={
                 "session_path": str(session_path()),
                 "storage_state_path": str(storage_state_path()),
             },
         )
     return None
+
+
+def _build_completion_script(shell: str) -> str:
+    if shell == "bash":
+        return """_pkucw_completion() {
+  local IFS=$'\\n'
+  local current="${COMP_WORDS[COMP_CWORD]}"
+  COMPREPLY=($(pkucw __complete -- "${COMP_WORDS[@]:1:COMP_CWORD}" "$current"))
+}
+complete -o default -F _pkucw_completion pkucw
+"""
+
+    if shell == "zsh":
+        return """autoload -Uz compinit >/dev/null 2>&1
+if ! whence compdef >/dev/null 2>&1; then
+  compinit -C >/dev/null 2>&1 || true
+fi
+
+_pkucw_completion() {
+  local -a completions
+  completions=("${(@f)$(pkucw __complete -- "${words[@]:2}")}")
+  _describe 'pkucw values' completions
+}
+if whence compdef >/dev/null 2>&1; then
+  compdef _pkucw_completion pkucw
+fi
+"""
+
+    return """function __pkucw_complete
+    set -l tokens (commandline -opc)
+    set -e tokens[1]
+    pkucw __complete -- $tokens
+end
+complete -c pkucw -f -a "(__pkucw_complete)"
+"""
+
+
+def _complete_words(
+    parser: argparse.ArgumentParser,
+    words: list[str],
+) -> list[str]:
+    current_parser, prefix = _resolve_completion_context(parser, words)
+    suggestions: list[str] = []
+
+    subparsers = _get_subparsers(current_parser)
+    if prefix.startswith("-"):
+        suggestions.extend(_collect_option_strings(current_parser))
+    else:
+        if subparsers is not None:
+            suggestions.extend(subparsers.choices.keys())
+        suggestions.extend(_collect_option_strings(current_parser))
+
+    filtered = [item for item in suggestions if item.startswith(prefix)]
+    return list(dict.fromkeys(filtered))
+
+
+def _resolve_completion_context(
+    parser: argparse.ArgumentParser,
+    words: list[str],
+) -> tuple[argparse.ArgumentParser, str]:
+    current_parser = parser
+    tokens = list(words)
+    prefix = tokens[-1] if tokens else ""
+    consumed = tokens[:-1] if tokens else []
+
+    for token in consumed:
+        if not token or token.startswith("-"):
+            continue
+        subparsers = _get_subparsers(current_parser)
+        if subparsers is None or token not in subparsers.choices:
+            continue
+        current_parser = subparsers.choices[token]
+
+    return current_parser, prefix
+
+
+def _get_subparsers(
+    parser: argparse.ArgumentParser,
+) -> argparse._SubParsersAction[argparse.ArgumentParser] | None:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    return None
+
+
+def _collect_option_strings(parser: argparse.ArgumentParser) -> list[str]:
+    options: list[str] = []
+    for action in parser._actions:
+        options.extend(action.option_strings)
+    return [item for item in options if item]
