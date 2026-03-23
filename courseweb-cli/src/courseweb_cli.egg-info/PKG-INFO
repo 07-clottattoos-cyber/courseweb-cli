@@ -1,0 +1,131 @@
+Metadata-Version: 2.4
+Name: courseweb-cli
+Version: 0.1.0
+Summary: Prototype CLI for PKU teaching-site workflows
+Author: Codex
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: playwright<2,>=1.53
+
+# courseweb-cli
+
+PKU teaching-site CLI with browser-backed workflows.
+
+## What exists today
+
+- A stable command tree based on the observed Blackboard flows
+- Short command entry: `cw`
+- Active-course context via `cw use`, `cw current`, and course-aware shortcuts
+- One-line install via `./install.sh`
+- One-line deployment test for the linked Mac mini via `./scripts/deploy-mac-mini.sh`
+- Local state management for session metadata
+- Real browser-backed `auth login` that saves Playwright storage state
+- Real `courses list`, `courses list --current`, and `courses list --archived`
+- Real `courses show <course>` and `course info <course>`
+- Real `course announcements list <course>` and `course announcements show <course> <announcement>`
+- Real `course contents list <course>`, `course contents tree <course>`, and `course contents show <course> <content>`
+- Real `course contents download <course> <content>` for Blackboard-hosted files and folders
+- Real `course recordings list/show/download/download-latest`
+- Segment progress output during recording downloads
+- Automatic `.ts -> .mp4` remux for recording downloads on macOS via Swift + AVFoundation
+- Download receipts include file size, SHA-256, and media probe metadata
+- Real `course assignments list <course>` and `course assignments show <course> <assignment>`
+- Safe `course assignments submit` flow with dry-run by default and live draft save via `--save-draft`
+- Draft attachment replacement/removal via `--replace-files` and `--clear-files`
+- Draft text/comment cleanup via `--clear-text` and `--clear-comment`
+- Double-confirm protection for `--final-submit`
+- JSON and human-readable output modes
+
+## Quick start
+
+```bash
+cd /Users/maixinchao/Documents/New\ project/courseweb-cli
+./install.sh
+cw login
+cw ls --current
+cw use "有机化学 (一)"
+cw doctor
+cw recordings list
+cw recordings latest --output ./output/downloads/recordings/latest
+cw announcements list
+cw contents tree "音乐与数学"
+cw assignments list
+```
+
+## Local install
+
+```bash
+cd /Users/maixinchao/Documents/New\ project/courseweb-cli
+./install.sh
+```
+
+The installer creates both `courseweb` and `cw`.
+
+## Mac mini deploy
+
+From this machine:
+
+```bash
+cd /Users/maixinchao/Documents/New\ project/courseweb-cli
+./scripts/deploy-mac-mini.sh
+```
+
+This copies the project to `1cxm1@1cxm1demac-mini.local`, installs it, and runs `cw doctor`.
+
+## State directory
+
+By default the prototype stores local state in:
+
+```text
+~/.courseweb
+```
+
+The real login flow stores:
+
+```text
+~/.courseweb/session.json
+~/.courseweb/storage_state.json
+```
+
+Recording downloads always produce a decrypted `.ts` file first, then try to remux it to `.mp4`.
+Use `--no-remux` to keep only the `.ts` output.
+Use `--no-progress` to suppress the segment progress line.
+The final JSON payload includes validation metadata for the downloaded artifacts.
+
+## Friendly command patterns
+
+```bash
+cw login
+cw ls
+cw use "有机化学 (一)"
+cw current
+cw info
+cw recordings list
+cw recordings latest
+cw contents list
+cw announcements show "课程群二维码"
+cw assignments submit "L4作业提交入口" --text "draft body" --save-draft
+```
+
+Once `cw use <course>` has been run, most course-aware commands can omit the course argument.
+
+## Credentials discovery
+
+`courseweb auth login` looks for credentials in this order:
+
+1. `--credentials-file`
+2. `COURSEWEB_CREDENTIALS_FILE`
+3. The nearest `env.md` found by walking upward from the current working directory
+
+The credentials file format is:
+
+```text
+line 1: username
+line 2: password
+```
+
+You can override it with:
+
+```bash
+COURSEWEB_HOME=/custom/path courseweb auth status
+```
