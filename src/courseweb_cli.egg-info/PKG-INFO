@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: courseweb-cli
-Version: 0.2.0
+Version: 0.3.0
 Summary: Prototype CLI for PKU teaching-site workflows
 Author: Codex
 Requires-Python: >=3.10
@@ -14,11 +14,14 @@ PKU teaching-site CLI with browser-backed workflows.
 ## What exists today
 
 - A stable command tree based on the observed Blackboard flows
-- Short command entry: `cw`
-- Active-course context via `cw use`, `cw current`, and course-aware shortcuts
+- Primary command entry: `pkucw`
+- Compatibility aliases: `cw`, `courseweb`
+- Active-course context via `pkucw use`, `pkucw current`, and course-aware shortcuts
 - One-line install via `./install.sh`
 - One-line deployment test for the linked Mac mini via `./scripts/deploy-mac-mini.sh`
-- `cw --version` and `./scripts/smoke-test.sh` for quick validation
+- Generic SSH deployment via `./scripts/deploy-remote.sh user@host`
+- Built-in shell completion via `pkucw completion zsh|bash|fish`
+- `pkucw --version` and `./scripts/smoke-test.sh` for quick validation
 - Local state management for session metadata
 - Real browser-backed `auth login` that saves Playwright storage state
 - Real `courses list`, `courses list --current`, and `courses list --archived`
@@ -42,15 +45,15 @@ PKU teaching-site CLI with browser-backed workflows.
 ```bash
 cd /Users/maixinchao/Documents/New\ project/courseweb-cli
 ./install.sh
-cw login
-cw ls --current
-cw use "有机化学 (一)"
-cw doctor
-cw recordings list
-cw recordings latest --output ./output/downloads/recordings/latest
-cw announcements list
-cw contents tree "音乐与数学"
-cw assignments list
+pkucw login
+pkucw ls --current
+pkucw use "有机化学 (一)"
+pkucw doctor
+pkucw recordings list
+pkucw recordings latest --output ./output/downloads/recordings/latest
+pkucw announcements list
+pkucw contents tree "音乐与数学"
+pkucw assignments list
 ```
 
 ## Local install
@@ -60,13 +63,13 @@ cd /Users/maixinchao/Documents/New\ project/courseweb-cli
 ./install.sh
 ```
 
-The installer creates both `courseweb` and `cw`.
-It also updates your shell profile so new terminals can resolve `cw` directly.
+The installer creates `pkucw` plus the compatibility aliases `courseweb` and `cw`.
+It also updates your shell profile so new terminals can resolve `pkucw` directly, and it installs shell completion for the current shell when possible.
 
 Quick sanity check:
 
 ```bash
-cw --version
+pkucw --version
 ./scripts/smoke-test.sh
 ```
 
@@ -80,6 +83,13 @@ cd /Users/maixinchao/Documents/New\ project/courseweb-cli
 ```
 
 This copies the project to `1cxm1@1cxm1demac-mini.local`, installs it, and runs the smoke test script remotely.
+
+For other SSH-reachable machines:
+
+```bash
+cd /Users/maixinchao/Documents/New\ project/courseweb-cli
+./scripts/deploy-remote.sh user@host
+```
 
 ## State directory
 
@@ -104,23 +114,33 @@ The final JSON payload includes validation metadata for the downloaded artifacts
 ## Friendly command patterns
 
 ```bash
-cw login
-cw ls
-cw use "有机化学 (一)"
-cw current
-cw info
-cw recordings list
-cw recordings latest
-cw contents list
-cw announcements show "课程群二维码"
-cw assignments submit "L4作业提交入口" --text "draft body" --save-draft
+pkucw login
+pkucw ls
+pkucw use "有机化学 (一)"
+pkucw current
+pkucw info
+pkucw recordings list
+pkucw recordings latest
+pkucw contents list
+pkucw announcements show "课程群二维码"
+pkucw assignments submit "L4作业提交入口" --text "draft body" --save-draft
 ```
 
-Once `cw use <course>` has been run, most course-aware commands can omit the course argument.
+Once `pkucw use <course>` has been run, most course-aware commands can omit the course argument.
+
+## Shell completion
+
+Quick one-off setup:
+
+```bash
+eval "$(pkucw completion zsh)"
+```
+
+The installer already writes a persistent completion hook for the current shell on macOS and other common SSH targets.
 
 ## Credentials discovery
 
-`courseweb auth login` looks for credentials in this order:
+`pkucw login` looks for credentials in this order:
 
 1. `--credentials-file`
 2. `COURSEWEB_CREDENTIALS_FILE`
@@ -136,5 +156,5 @@ line 2: password
 You can override it with:
 
 ```bash
-COURSEWEB_HOME=/custom/path courseweb auth status
+COURSEWEB_HOME=/custom/path pkucw status
 ```
