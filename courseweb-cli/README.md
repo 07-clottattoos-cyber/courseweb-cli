@@ -9,6 +9,7 @@ PKU teaching-site CLI with browser-backed workflows.
 - Active-course context via `cw use`, `cw current`, and course-aware shortcuts
 - One-line install via `./install.sh`
 - One-line deployment test for the linked Mac mini via `./scripts/deploy-mac-mini.sh`
+- `cw --version` and `./scripts/smoke-test.sh` for quick validation
 - Local state management for session metadata
 - Real browser-backed `auth login` that saves Playwright storage state
 - Real `courses list`, `courses list --current`, and `courses list --archived`
@@ -52,6 +53,13 @@ cd /Users/maixinchao/Documents/New\ project/courseweb-cli
 
 The installer creates both `courseweb` and `cw`.
 
+Quick sanity check:
+
+```bash
+cw --version
+./scripts/smoke-test.sh
+```
+
 ## Mac mini deploy
 
 From this machine:
@@ -61,7 +69,7 @@ cd /Users/maixinchao/Documents/New\ project/courseweb-cli
 ./scripts/deploy-mac-mini.sh
 ```
 
-This copies the project to `1cxm1@1cxm1demac-mini.local`, installs it, and runs `cw doctor`.
+This copies the project to `1cxm1@1cxm1demac-mini.local`, installs it, and runs the smoke test script remotely.
 
 ## State directory
 
