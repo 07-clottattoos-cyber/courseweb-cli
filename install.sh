@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_ROOT="${COURSEWEB_INSTALL_ROOT:-$HOME/.local/share/courseweb-cli}"
 BIN_DIR="${COURSEWEB_BIN_DIR:-$HOME/.local/bin}"
+PATH_EXPORT_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
 
 pick_python() {
   if [[ -n "${COURSEWEB_PYTHON:-}" ]]; then
@@ -40,6 +41,40 @@ install_uv_python() {
   "${uv_bin}" python find 3.12
 }
 
+pick_profile_file() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+
+  case "${shell_name}" in
+    zsh)
+      printf '%s\n' "${HOME}/.zprofile"
+      ;;
+    bash)
+      printf '%s\n' "${HOME}/.bash_profile"
+      ;;
+    *)
+      printf '%s\n' "${HOME}/.profile"
+      ;;
+  esac
+}
+
+ensure_path_config() {
+  local profile_file="$1"
+  mkdir -p "$(dirname "${profile_file}")"
+  touch "${profile_file}"
+  if ! grep -F "${PATH_EXPORT_LINE}" "${profile_file}" >/dev/null 2>&1; then
+    {
+      echo
+      echo "# Added by courseweb-cli installer"
+      echo "${PATH_EXPORT_LINE}"
+    } >> "${profile_file}"
+    printf '%s\n' "${profile_file}"
+    return 0
+  fi
+
+  return 1
+}
+
 PYTHON_BIN="$(pick_python || true)"
 if [[ -z "${PYTHON_BIN}" ]] || ! python_is_supported "${PYTHON_BIN}"; then
   echo "Python 3.10+ was not found on PATH. Installing a user-local Python with uv..." >&2
@@ -62,12 +97,22 @@ mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}" "${HOME}/.courseweb"
 
 ln -sf "${VENV_DIR}/bin/courseweb" "${BIN_DIR}/courseweb"
 ln -sf "${VENV_DIR}/bin/cw" "${BIN_DIR}/cw"
+export PATH="${BIN_DIR}:${PATH}"
+
+PROFILE_FILE="$(pick_profile_file)"
+UPDATED_PROFILE=""
+if UPDATED_PROFILE="$(ensure_path_config "${PROFILE_FILE}")"; then
+  PROFILE_NOTE="Updated ${UPDATED_PROFILE} so future shells can find cw."
+else
+  PROFILE_NOTE="PATH already includes ${BIN_DIR} in ${PROFILE_FILE}."
+fi
 
 echo
 echo "Installed courseweb-cli."
 echo "  Python: ${PYTHON_BIN}"
 echo "  Venv:   ${VENV_DIR}"
 echo "  Bins:   ${BIN_DIR}/courseweb, ${BIN_DIR}/cw"
+echo "  Shell:  ${PROFILE_NOTE}"
 
 case ":$PATH:" in
   *":${BIN_DIR}:"*) ;;
