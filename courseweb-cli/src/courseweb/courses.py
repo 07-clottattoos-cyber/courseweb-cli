@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import difflib
 import re
 import time
 from dataclasses import dataclass
@@ -325,11 +324,14 @@ def _course_match_score(course: CourseRecord, raw_query: str, normalized_query: 
             best = max(best, 84.0)
             continue
 
-        ratio = difflib.SequenceMatcher(None, normalized_query or raw_query, normalized_value or value).ratio()
-        if ratio >= 0.72:
-            best = max(best, 60.0 + ratio * 20.0)
+        overlap = _ngram_overlap(normalized_query or raw_query, normalized_value or value)
+        if overlap >= 0.8:
+            best = max(best, 74.0 + overlap * 10.0)
+            continue
+        if overlap >= 0.55:
+            best = max(best, 64.0 + overlap * 10.0)
 
-    if course.status == "current":
+    if best > 0 and course.status == "current":
         best += 0.5
     return best
 
@@ -338,6 +340,21 @@ def _normalize_lookup(value: str) -> str:
     lowered = value.strip().lower()
     lowered = lowered.translate(NUMERAL_TRANSLATION)
     return NORMALIZE_RE.sub("", lowered)
+
+
+def _ngram_overlap(query: str, value: str) -> float:
+    query_ngrams = _ngrams(query)
+    value_ngrams = _ngrams(value)
+    if not query_ngrams or not value_ngrams:
+        return 0.0
+    overlap = len(query_ngrams & value_ngrams)
+    return overlap / len(query_ngrams)
+
+
+def _ngrams(value: str) -> set[str]:
+    if len(value) < 2:
+        return {value} if value else set()
+    return {value[index : index + 2] for index in range(len(value) - 1)}
 
 
 def _normalize_course(item: dict[str, str], *, status: str) -> CourseRecord:
