@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from json import JSONDecodeError
 from pathlib import Path
 
-from .models import SessionState
+from .models import AccountRecord, SessionState
 
 
 def utc_now_iso() -> str:
@@ -27,6 +27,10 @@ def session_path() -> Path:
 
 def storage_state_path() -> Path:
     return courseweb_home() / "storage_state.json"
+
+
+def accounts_path() -> Path:
+    return courseweb_home() / "accounts.json"
 
 
 def ensure_home() -> Path:
@@ -60,6 +64,47 @@ def save_session(state: SessionState) -> Path:
     path = session_path()
     path.write_text(
         json.dumps(state.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def load_accounts() -> list[AccountRecord]:
+    path = accounts_path()
+    if not path.exists():
+        return []
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+
+    try:
+        data = json.loads(raw)
+    except JSONDecodeError:
+        return []
+
+    if not isinstance(data, list):
+        return []
+
+    allowed = {item.name for item in fields(AccountRecord)}
+    accounts: list[AccountRecord] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        filtered = {key: value for key, value in item.items() if key in allowed}
+        try:
+            accounts.append(AccountRecord(**filtered))
+        except TypeError:
+            continue
+    return accounts
+
+
+def save_accounts(accounts: list[AccountRecord]) -> Path:
+    ensure_home()
+    path = accounts_path()
+    path.write_text(
+        json.dumps([account.to_dict() for account in accounts], ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return path

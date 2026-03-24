@@ -31,7 +31,7 @@ def _render_command_result(data: dict[str, Any], *, use_color: bool) -> str:
 
     sections: list[str] = []
     if message:
-        message_text = message if ok else f"Error: {message}"
+        message_text = message if ok else f"错误：{message}"
         sections.append(_style_message(message_text, ok=ok, use_color=use_color))
 
     if isinstance(payload, dict) and payload:
@@ -43,7 +43,7 @@ def _render_command_result(data: dict[str, Any], *, use_color: bool) -> str:
         sections.append(str(payload))
 
     if not sections:
-        return "Success." if ok else "Error."
+        return "成功。" if ok else "错误。"
 
     return "\n\n".join(section for section in sections if section.strip())
 

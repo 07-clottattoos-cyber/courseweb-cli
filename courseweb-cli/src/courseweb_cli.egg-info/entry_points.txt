@@ -1,4 +1,0 @@
-[console_scripts]
-courseweb = courseweb.cli:main
-cw = courseweb.cli:main
-pkucw = courseweb.cli:main

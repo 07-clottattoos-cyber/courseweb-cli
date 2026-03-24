@@ -95,7 +95,7 @@ class CourseInfo:
         }
 
 
-def scrape_courses(*, storage_state_path: str, headless: bool = True, timeout_ms: int = 30000) -> list[CourseRecord]:
+def scrape_courses(*, storage_state_path: str, headless: bool = True, timeout_ms: int = 7000) -> list[CourseRecord]:
     try:
         data = _run_with_retries(
             lambda: _scrape_courses_once(
@@ -105,9 +105,9 @@ def scrape_courses(*, storage_state_path: str, headless: bool = True, timeout_ms
             )
         )
     except PlaywrightTimeoutError as exc:
-        raise CourseScrapeError(f"Timed out while loading the portal page: {exc}") from exc
+        raise CourseScrapeError(f"加载教学网门户页面超时：{exc}") from exc
     except Exception as exc:  # pragma: no cover - operational fallback
-        raise CourseScrapeError(f"Could not scrape courses: {exc}") from exc
+        raise CourseScrapeError(f"抓取课程列表失败：{exc}") from exc
 
     records: list[CourseRecord] = []
     for item in data.get("current", []):
@@ -122,7 +122,7 @@ def scrape_course_info(
     storage_state_path: str,
     course: CourseRecord,
     headless: bool = True,
-    timeout_ms: int = 30000,
+    timeout_ms: int = 15000,
 ) -> CourseInfo:
     try:
         raw = _run_with_retries(
@@ -134,9 +134,9 @@ def scrape_course_info(
             )
         )
     except PlaywrightTimeoutError as exc:
-        raise CourseScrapeError(f"Timed out while loading course info: {exc}") from exc
+        raise CourseScrapeError(f"加载课程信息超时：{exc}") from exc
     except Exception as exc:  # pragma: no cover - operational fallback
-        raise CourseScrapeError(f"Could not scrape course info: {exc}") from exc
+        raise CourseScrapeError(f"抓取课程信息失败：{exc}") from exc
 
     return CourseInfo(
         course=course,
@@ -252,7 +252,7 @@ def _scrape_course_info_once(
             browser.close()
 
 
-def _run_with_retries(operation: Callable[[], Any], *, attempts: int = 3, delay_seconds: float = 1.5) -> Any:
+def _run_with_retries(operation: Callable[[], Any], *, attempts: int = 1, delay_seconds: float = 1.5) -> Any:
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:

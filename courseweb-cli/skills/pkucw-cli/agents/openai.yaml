@@ -1,7 +1,7 @@
 interface:
-  display_name: "PKU Course CLI"
-  short_description: "Safe PKU teaching-site workflows through pkucw."
-  default_prompt: "Use $pkucw-cli to inspect PKU teaching-site courses safely through the pkucw CLI."
+  display_name: "PKUCW Teaching CLI"
+  short_description: "Operate PKU teaching-site workflows through pkucw with safe reads, downloads, and guarded assignment writes."
+  default_prompt: "Use $pkucw-cli to work with PKU course.pku.edu.cn through the pkucw CLI. Prefer --json for structured reads, resolve exact course titles before acting, use downloads instead of browser scraping when possible, and never perform live assignment writes unless the user explicitly authorizes them."
 
 policy:
   allow_implicit_invocation: true

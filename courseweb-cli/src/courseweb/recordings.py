@@ -222,9 +222,9 @@ def scrape_recordings(
             context.close()
             browser.close()
     except PlaywrightTimeoutError as exc:
-        raise RecordingScrapeError(f"Timed out while loading recordings: {exc}") from exc
+        raise RecordingScrapeError(f"加载课堂实录列表超时：{exc}") from exc
     except Exception as exc:
-        raise RecordingScrapeError(f"Could not scrape recordings: {exc}") from exc
+        raise RecordingScrapeError(f"抓取课堂实录失败：{exc}") from exc
 
     recording_info = CourseInfo(
         course=info.course,
@@ -293,11 +293,11 @@ def download_recording(
     )
 
     if detail.playlist_url is None or playback_state is None:
-        raise RecordingScrapeError("Could not resolve the recording stream URL from the playback page.")
+        raise RecordingScrapeError("无法从播放页面解析课堂实录的流地址。")
 
     playlist = _load_hls_playlist(detail.playlist_url)
     if not playlist.segment_urls:
-        raise RecordingScrapeError("The recording playlist did not contain any media segments.")
+        raise RecordingScrapeError("课堂实录播放列表中没有可下载的媒体分片。")
 
     target_path, preferred_mp4_path = _resolve_output_paths(item=item, output_path=output_path)
     headers = {
@@ -350,7 +350,7 @@ def download_recording(
     if remux_to_mp4:
         remux_tool = _detect_remux_tool()
         if remux_tool is None:
-            note = "No local remux tool was found, so the recording was kept as .ts."
+            note = "本机没有可用的转封装工具，因此保留为 .ts 文件。"
         else:
             try:
                 _remux_ts_to_mp4(
@@ -366,7 +366,7 @@ def download_recording(
                 note = str(exc)
 
     if show_progress:
-        print("Validating downloaded media artifacts...", file=sys.stderr, flush=True)
+        print("正在校验已下载的媒体文件...", file=sys.stderr, flush=True)
 
     ts_artifact = _inspect_media_artifact(target_path)
     mp4_artifact = _inspect_media_artifact(final_output_path) if remuxed else None
@@ -426,9 +426,9 @@ def _capture_recording_detail(
             browser.close()
             return detail, state
     except PlaywrightTimeoutError as exc:
-        raise RecordingScrapeError(f"Timed out while opening the recording player: {exc}") from exc
+        raise RecordingScrapeError(f"打开课堂实录播放器超时：{exc}") from exc
     except Exception as exc:
-        raise RecordingScrapeError(f"Could not open the recording player: {exc}") from exc
+        raise RecordingScrapeError(f"打开课堂实录播放器失败：{exc}") from exc
 
 
 def _wait_for_stream_requests(*, page, request_urls: list[str], timeout_ms: int) -> None:
@@ -447,7 +447,7 @@ def _load_hls_playlist(url: str) -> HlsMediaPlaylist:
     if "#EXT-X-STREAM-INF" in text:
         variants = _parse_variant_playlist(text, base_url=url)
         if not variants:
-            raise RecordingScrapeError("The recording exposed a master playlist without media variants.")
+            raise RecordingScrapeError("课堂实录返回了主播放列表，但没有可用的媒体清晰度分支。")
         playlist_url = variants[0]
         text = _request_text(playlist_url, headers={"User-Agent": "courseweb-cli/0.1"})
 
@@ -574,7 +574,7 @@ def _decrypt_aes_segment(payload: bytes, *, key: bytes, iv: bytes) -> bytes:
     )
     if result.returncode != 0:
         error_text = result.stderr.decode("utf-8", errors="replace").strip()
-        raise RecordingScrapeError(f"Could not decrypt an HLS segment: {error_text or 'openssl failed'}")
+        raise RecordingScrapeError(f"无法解密 HLS 分片：{error_text or 'openssl 执行失败'}")
     return result.stdout
 
 
@@ -607,7 +607,7 @@ def _resolve_output_paths(*, item: RecordingItem, output_path: str | None) -> tu
 def _emit_download_progress(*, item: RecordingItem, index: int, total: int) -> None:
     percent = (index / total) * 100 if total else 100
     print(
-        f"\rDownloading {item.title}: {index}/{total} segments ({percent:5.1f}%)",
+        f"\r正在下载 {item.title}：{index}/{total} 个分片（{percent:5.1f}%）",
         end="",
         file=sys.stderr,
         flush=True,
@@ -628,7 +628,7 @@ def _detect_probe_tool() -> str | None:
 
 def _remux_ts_to_mp4(*, input_path: Path, output_path: Path, tool: str) -> None:
     if tool != "swift-avfoundation":
-        raise RecordingScrapeError(f"Unsupported remux tool: {tool}")
+        raise RecordingScrapeError(f"不支持的转封装工具：{tool}")
 
     swift_script = """
 import Foundation
@@ -682,7 +682,7 @@ _ = semaphore.wait(timeout: .now() + 3600)
     if result.returncode != 0 or not output_path.exists():
         error_text = (result.stderr or result.stdout).strip()
         raise RecordingScrapeError(
-            f"Downloaded the .ts file but could not remux it to .mp4: {error_text or 'swift export failed'}"
+            f"已成功下载 .ts 文件，但无法转封装为 .mp4：{error_text or 'swift 导出失败'}"
         )
 
 
@@ -734,7 +734,7 @@ def _inspect_media_artifact(path: Path) -> MediaArtifact:
 
 def _probe_media_file(*, path: Path, tool: str) -> dict[str, Any]:
     if tool != "swift-avfoundation":
-        raise RecordingScrapeError(f"Unsupported media probe tool: {tool}")
+        raise RecordingScrapeError(f"不支持的媒体探测工具：{tool}")
 
     swift_script = """
 import Foundation
@@ -778,7 +778,7 @@ print(String(decoding: data, as: UTF8.self))
 
     if result.returncode != 0:
         error_text = (result.stderr or result.stdout).strip()
-        raise RecordingScrapeError(f"Could not probe media file {path.name}: {error_text or 'swift probe failed'}")
+        raise RecordingScrapeError(f"无法探测媒体文件 {path.name}：{error_text or 'swift 探测失败'}")
     return json.loads(result.stdout or "{}")
 
 

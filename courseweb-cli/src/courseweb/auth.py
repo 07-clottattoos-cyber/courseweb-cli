@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +11,7 @@ from playwright.sync_api import sync_playwright
 
 DEFAULT_LOGIN_URL = "https://course.pku.edu.cn/webapps/bb-sso-BBLEARN/login.html"
 PORTAL_URL_RE = re.compile(r"https://course\.pku\.edu\.cn/webapps/portal/execute/tabs/tabAction")
+PORTAL_HOME_URL = "https://course.pku.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1"
 
 
 class AuthError(RuntimeError):
@@ -31,42 +32,6 @@ class LoginArtifacts:
     user_display: str | None
 
 
-def resolve_credentials_file(explicit: Path | None) -> Path:
-    if explicit is not None:
-        path = explicit.expanduser().resolve()
-        if not path.exists():
-            raise AuthError(f"Credentials file not found: {path}")
-        return path
-
-    env_value = os.environ.get("COURSEWEB_CREDENTIALS_FILE")
-    if env_value:
-        path = Path(env_value).expanduser().resolve()
-        if not path.exists():
-            raise AuthError(f"Credentials file from COURSEWEB_CREDENTIALS_FILE not found: {path}")
-        return path
-
-    for parent in [Path.cwd().resolve(), *Path.cwd().resolve().parents]:
-        candidate = parent / "env.md"
-        if candidate.exists():
-            return candidate
-
-    raise AuthError(
-        "Could not find credentials. Pass --credentials-file, set COURSEWEB_CREDENTIALS_FILE, or place env.md in the working tree."
-    )
-
-
-def load_credentials(explicit: Path | None) -> Credentials:
-    path = resolve_credentials_file(explicit)
-    lines = path.read_text(encoding="utf-8").splitlines()
-    username = lines[0].strip() if len(lines) > 0 else ""
-    password = lines[1].strip() if len(lines) > 1 else ""
-
-    if not username or not password:
-        raise AuthError(f"Credentials file is missing username or password: {path}")
-
-    return Credentials(username=username, password=password, source=str(path))
-
-
 def login_with_playwright(
     *,
     credentials: Credentials,
@@ -83,37 +48,41 @@ def login_with_playwright(
             context = browser.new_context(ignore_https_errors=True)
             page = context.new_page()
 
-            page.goto(login_url, wait_until="domcontentloaded", timeout=timeout_ms)
-            page.wait_for_url(re.compile(r"https://iaaa\.pku\.edu\.cn/iaaa/oauth\.jsp"), timeout=timeout_ms)
+            _open_login_entry(page, entry_urls=[login_url, PORTAL_HOME_URL], timeout_ms=timeout_ms)
+            if not PORTAL_URL_RE.search(page.url):
+                _wait_for_login_surface(page, timeout_ms=timeout_ms)
+            if not PORTAL_URL_RE.search(page.url):
+                _fill_first_available(
+                    page,
+                    selectors=[
+                        "#user_name",
+                        'input[name="userName"]',
+                        'input[placeholder="学号/职工号/手机号"]',
+                        'input[placeholder="User ID / PKU Email / Cell Phone"]',
+                    ],
+                    value=credentials.username,
+                    timeout_ms=timeout_ms,
+                    field_label="username",
+                )
+                _fill_first_available(
+                    page,
+                    selectors=[
+                        "#password",
+                        'input[name="password"]',
+                        'input[placeholder="密码"]',
+                        'input[placeholder="Password"]',
+                    ],
+                    value=credentials.password,
+                    timeout_ms=timeout_ms,
+                    field_label="password",
+                )
+                page.locator("#logon_button").click()
 
-            _fill_first_available(
-                page,
-                selectors=[
-                    "#user_name",
-                    'input[name="userName"]',
-                    'input[placeholder="学号/职工号/手机号"]',
-                    'input[placeholder="User ID / PKU Email / Cell Phone"]',
-                ],
-                value=credentials.username,
-                timeout_ms=timeout_ms,
-                field_label="username",
-            )
-            _fill_first_available(
-                page,
-                selectors=[
-                    "#password",
-                    'input[name="password"]',
-                    'input[placeholder="密码"]',
-                    'input[placeholder="Password"]',
-                ],
-                value=credentials.password,
-                timeout_ms=timeout_ms,
-                field_label="password",
-            )
-            page.locator("#logon_button").click()
-
-            page.wait_for_url(PORTAL_URL_RE, timeout=timeout_ms)
-            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                _wait_for_portal_surface(page, timeout_ms=timeout_ms)
+            try:
+                page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 4000))
+            except PlaywrightTimeoutError:
+                pass
             try:
                 page.wait_for_selector("main h1", timeout=5000)
             except PlaywrightTimeoutError:
@@ -131,9 +100,9 @@ def login_with_playwright(
                 user_display=user_display,
             )
     except PlaywrightTimeoutError as exc:
-        raise AuthError(f"Timed out during browser login: {exc}") from exc
+        raise AuthError(f"浏览器登录超时：{exc}") from exc
     except Exception as exc:  # pragma: no cover - used for operational errors
-        raise AuthError(f"Browser login failed: {exc}") from exc
+        raise AuthError(f"浏览器登录失败：{exc}") from exc
 
 
 def _fill_first_available(page, *, selectors: list[str], value: str, timeout_ms: int, field_label: str) -> None:
@@ -145,7 +114,61 @@ def _fill_first_available(page, *, selectors: list[str], value: str, timeout_ms:
             continue
         locator.fill(value)
         return
-    raise AuthError(f"Could not find the {field_label} field on the login page.")
+    field_name = "用户名" if field_label == "username" else "密码" if field_label == "password" else field_label
+    raise AuthError(f"登录页面中找不到“{field_name}”输入框。")
+
+
+def _wait_for_login_surface(page, *, timeout_ms: int) -> None:
+    selectors = [
+        "#user_name",
+        'input[name="userName"]',
+        'input[placeholder="学号/职工号/手机号"]',
+        'input[placeholder="User ID / PKU Email / Cell Phone"]',
+        "#password",
+        'input[name="password"]',
+    ]
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    while time.monotonic() < deadline:
+        if PORTAL_URL_RE.search(page.url):
+            return
+        for selector in selectors:
+            locator = page.locator(selector).first
+            if locator.count():
+                try:
+                    locator.wait_for(state="visible", timeout=250)
+                except PlaywrightTimeoutError:
+                    continue
+                return
+        page.wait_for_timeout(250)
+    raise AuthError("未能进入北大统一登录表单页面。")
+
+
+def _wait_for_portal_surface(page, *, timeout_ms: int) -> None:
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    while time.monotonic() < deadline:
+        if PORTAL_URL_RE.search(page.url):
+            return
+        if page.locator("a[href*='execute/launcher?type=Course']").count():
+            return
+        page.wait_for_timeout(250)
+    raise AuthError("无法确认是否已成功进入教学网门户。")
+
+
+def _open_login_entry(page, *, entry_urls: list[str], timeout_ms: int) -> None:
+    unique_urls: list[str] = []
+    for url in entry_urls:
+        if url and url not in unique_urls:
+            unique_urls.append(url)
+
+    last_error: PlaywrightTimeoutError | None = None
+    per_url_timeout = max(3000, timeout_ms // max(len(unique_urls), 1))
+    for entry_url in unique_urls:
+        try:
+            page.goto(entry_url, wait_until="commit", timeout=per_url_timeout)
+            return
+        except PlaywrightTimeoutError as exc:
+            last_error = exc
+    raise last_error or AuthError("无法打开任何一个北大登录入口 URL。")
 
 
 def _extract_user_display(page) -> str | None:

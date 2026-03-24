@@ -18,8 +18,24 @@ class SessionState:
     updated_at: str | None = None
     last_verified_at: str | None = None
     authenticated: bool = False
+    account_username: str | None = None
+    account_label: str | None = None
     active_course_id: str | None = None
     active_course_title: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class AccountRecord:
+    username: str
+    label: str | None = None
+    is_default: bool = False
+    created_at: str | None = None
+    updated_at: str | None = None
+    last_used_at: str | None = None
+    last_login_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

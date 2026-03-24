@@ -3,3 +3,7 @@ __pycache__/
 .DS_Store
 output/
 .venv/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
