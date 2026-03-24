@@ -117,9 +117,9 @@ def scrape_announcements(
             context.close()
             browser.close()
     except PlaywrightTimeoutError as exc:
-        raise AnnouncementScrapeError(f"Timed out while loading announcements: {exc}") from exc
+        raise AnnouncementScrapeError(f"加载课程通知超时：{exc}") from exc
     except Exception as exc:  # pragma: no cover - operational fallback
-        raise AnnouncementScrapeError(f"Could not scrape announcements: {exc}") from exc
+        raise AnnouncementScrapeError(f"抓取课程通知失败：{exc}") from exc
 
     details = [
         AnnouncementDetail(

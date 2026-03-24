@@ -138,8 +138,10 @@ VENV_DIR="${INSTALL_ROOT}/.venv"
 mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}" "${HOME}/.courseweb" "${COMPLETION_ROOT}"
 
 "${PYTHON_BIN}" -m venv "${VENV_DIR}"
-"${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel
-"${VENV_DIR}/bin/pip" install -e "${PROJECT_DIR}"
+if ! "${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel; then
+  echo "Warning: failed to upgrade pip/setuptools/wheel; continuing with bundled versions." >&2
+fi
+"${VENV_DIR}/bin/pip" install --no-build-isolation -e "${PROJECT_DIR}"
 "${VENV_DIR}/bin/python" -m playwright install chromium
 
 ln -sf "${VENV_DIR}/bin/pkucw" "${BIN_DIR}/pkucw"
@@ -196,4 +198,8 @@ case ":$PATH:" in
 esac
 
 echo
-"${BIN_DIR}/pkucw" doctor
+if "${BIN_DIR}/pkucw" doctor --json >/dev/null 2>&1; then
+  echo "Quick check: pkucw doctor --json passed."
+else
+  echo "Quick check: pkucw doctor --json failed. Run `pkucw doctor --json` for details." >&2
+fi

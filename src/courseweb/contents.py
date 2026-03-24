@@ -179,7 +179,7 @@ def download_content(
         )
 
     if item.type != "file" or not item.download_url:
-        raise ContentScrapeError("Only file and folder content items can be downloaded right now.")
+        raise ContentScrapeError("当前仅支持下载文件和文件夹类型的教学内容。")
 
     target_path = Path(output_path).expanduser().resolve() if output_path else Path.cwd() / _safe_name(item.title)
     if target_path.exists() and target_path.is_dir():
@@ -273,9 +273,9 @@ def _scrape_content_page(
             context.close()
             browser.close()
     except PlaywrightTimeoutError as exc:
-        raise ContentScrapeError(f"Timed out while loading course contents: {exc}") from exc
+        raise ContentScrapeError(f"加载教学内容超时：{exc}") from exc
     except Exception as exc:  # pragma: no cover - operational fallback
-        raise ContentScrapeError(f"Could not scrape course contents: {exc}") from exc
+        raise ContentScrapeError(f"抓取教学内容失败：{exc}") from exc
 
     items: list[ContentItem] = []
     for raw in raw_items:

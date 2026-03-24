@@ -1,151 +1,176 @@
 # courseweb-cli
 
-PKU teaching-site CLI with browser-backed workflows.
+`pkucw` 是一个面向北大教学网（`course.pku.edu.cn`）的命令行工具。  
+它用真实浏览器维持登录状态，同时把课程、通知、教学内容、作业、课堂实录等常见操作整理成稳定可复用的 CLI。
 
-## What exists today
+项目同时兼顾两类使用者：
 
-- A stable command tree based on the observed Blackboard flows
-- Primary command entry: `pkucw`
-- Compatibility aliases: `cw`, `courseweb`
-- Active-course context via `pkucw use`, `pkucw current`, and course-aware shortcuts
-- One-line install via `./install.sh`
-- One-line deployment test for the linked Mac mini via `./scripts/deploy-mac-mini.sh`
-- Generic SSH deployment via `./scripts/deploy-remote.sh user@host`
-- Built-in shell completion via `pkucw completion zsh|bash|fish`
-- `pkucw --version` and `./scripts/smoke-test.sh` for quick validation
-- Local state management for session metadata
-- Real browser-backed `auth login` that saves Playwright storage state
-- Real `courses list`, `courses list --current`, and `courses list --archived`
-- Real `courses show <course>` and `course info <course>`
-- Real `course announcements list <course>` and `course announcements show <course> <announcement>`
-- Real `course contents list <course>`, `course contents tree <course>`, and `course contents show <course> <content>`
-- Real `course contents download <course> <content>` for Blackboard-hosted files and folders
-- Real `course recordings list/show/download/download-latest`
-- Segment progress output during recording downloads
-- Automatic `.ts -> .mp4` remux for recording downloads on macOS via Swift + AVFoundation
-- Download receipts include file size, SHA-256, and media probe metadata
-- Real `course assignments list <course>` and `course assignments show <course> <assignment>`
-- Safe `course assignments submit` flow with dry-run by default and live draft save via `--save-draft`
-- Draft attachment replacement/removal via `--replace-files` and `--clear-files`
-- Draft text/comment cleanup via `--clear-text` and `--clear-comment`
-- Double-confirm protection for `--final-submit`
-- JSON and human-readable output modes
+- 人类用户：在终端里直接查询和下载
+- agent / 脚本：通过稳定子命令和 `--json` 输出调用
 
-## Quick start
+## 当前能力
+
+- 主命令：`pkucw`
+- 兼容别名：`cw`、`courseweb`
+- 终端内登录
+- 账号保存到 macOS Keychain
+- Blackboard 会话状态本地持久化
+- 课程上下文切换：`pkucw use`、`pkucw current`
+- 人类可读输出 + `--json`
+- `zsh` / `bash` / `fish` 补全
+- 通知列表与详情
+- 教学内容列表、树形查看、详情和下载
+- 作业列表与详情
+- 作业说明与附件下载
+- 安全默认的作业提交流程
+- 课堂实录列表、详情与下载
+
+## 安装
 
 ```bash
-cd /Users/maixinchao/Documents/New\ project/courseweb-cli
-./install.sh
-pkucw login
-pkucw ls --current
-pkucw use "有机化学 (一)"
-pkucw doctor
-pkucw recordings list
-pkucw recordings latest --output ./output/downloads/recordings/latest
-pkucw announcements list
-pkucw contents tree "音乐与数学"
-pkucw assignments list
-```
-
-## Local install
-
-```bash
-cd /Users/maixinchao/Documents/New\ project/courseweb-cli
+git clone <GitHub 仓库地址> courseweb-cli
+cd courseweb-cli
 ./install.sh
 ```
 
-The installer creates `pkucw` plus the compatibility aliases `courseweb` and `cw`.
-It also updates your shell profile so new terminals can resolve `pkucw` directly, and it installs shell completion for the current shell when possible.
-
-Quick sanity check:
+安装后验证：
 
 ```bash
 pkucw --version
 ./scripts/smoke-test.sh
 ```
 
-## Mac mini deploy
+## OpenClaw 安装
 
-From this machine:
+如果你希望让 OpenClaw 同时安装 `pkucw` 工具和 `pkucw-cli` skill，可以直接运行：
 
 ```bash
-cd /Users/maixinchao/Documents/New\ project/courseweb-cli
-./scripts/deploy-mac-mini.sh
+git clone <GitHub 仓库地址> courseweb-cli
+cd courseweb-cli
+./scripts/install-openclaw.sh
 ```
 
-This copies the project to `1cxm1@1cxm1demac-mini.local`, installs it, and runs the smoke test script remotely.
+默认行为：
 
-For other SSH-reachable machines:
+- 安装 `pkucw` 本体
+- 将 skill 安装到 `~/.openclaw/workspace/skills/pkucw-cli`
+- 默认用符号链接方式挂载 skill，方便后续跟随仓库更新
+
+常用覆写方式：
 
 ```bash
-cd /Users/maixinchao/Documents/New\ project/courseweb-cli
+OPENCLAW_HOME=~/.openclaw ./scripts/install-openclaw.sh
+OPENCLAW_SKILLS_DIR=./.openclaw-skills ./scripts/install-openclaw.sh
+PKUCW_SKILL_INSTALL_MODE=copy ./scripts/install-openclaw.sh
+PKUCW_SKIP_TOOL_INSTALL=1 ./scripts/install-openclaw.sh
+```
+
+安装后可验证：
+
+```bash
+pkucw --version
+openclaw skills list | grep pkucw-cli
+```
+
+如果你要让 OpenClaw 代理自己完成安装，可以直接给它这段提示词：
+
+```text
+请在当前仓库安装 pkucw 和 pkucw-cli skill。
+要求：
+1. 运行 ./scripts/install-openclaw.sh
+2. 确认 pkucw --version 可用
+3. 确认 openclaw skills list 中能看到 pkucw-cli
+4. 如果失败，优先修复 PATH、Python、skill 目录问题
+5. 最后返回安装结果、pkucw 版本、skill 安装路径和验证命令输出摘要
+```
+
+## 首次使用
+
+推荐流程：
+
+```bash
+pkucw accounts add
+pkucw login
+pkucw ls --current
+```
+
+如果你已经保存过默认账号，也可以直接：
+
+```bash
+pkucw login
+```
+
+常用账号命令：
+
+```bash
+pkucw accounts list
+pkucw accounts show
+pkucw accounts use <account>
+pkucw accounts remove <account>
+```
+
+## 常用命令
+
+```bash
+pkucw login
+pkucw ls --current
+pkucw use "有机化学 (一)"
+pkucw current
+pkucw info
+pkucw announcements list
+pkucw contents tree
+pkucw assignments list
+pkucw assignments download "L4作业提交入口" --output ./downloads/assignment
+pkucw recordings latest --output ./downloads/latest
+```
+
+在执行过 `pkucw use <course>` 之后，多数课程内命令都可以省略课程参数。
+
+## 会话恢复
+
+如果本地 Blackboard 会话过期，课程相关命令会先做一次快速探测，再尝试用已保存账号自动恢复。  
+如果站点本身状态异常，命令会尽快返回明确错误，而不是长时间无响应。
+
+## 面向 agent / 脚本
+
+- 推荐统一加 `--json`
+- 命令名保持稳定，不建议 agent 去猜课程名
+- 建议先 `pkucw ls --current --json`，再 `pkucw use "<精确课程名>" --json`
+- OpenClaw 可配合 [pkucw skill](skills/pkucw-cli/SKILL.md) 一起使用
+
+## 远程部署
+
+通用 SSH 部署：
+
+```bash
 ./scripts/deploy-remote.sh user@host
 ```
 
-## State directory
+如果你有固定目标主机，也可以：
 
-By default the prototype stores local state in:
+```bash
+PKUCW_DEPLOY_HOST=user@host ./scripts/deploy-host.sh
+```
+
+## 本地状态目录
+
+默认状态目录：
 
 ```text
 ~/.courseweb
 ```
 
-The real login flow stores:
+重要文件：
 
-```text
-~/.courseweb/session.json
-~/.courseweb/storage_state.json
-```
+- `~/.courseweb/session.json`：当前会话元数据
+- `~/.courseweb/storage_state.json`：Playwright 浏览器状态
+- `~/.courseweb/accounts.json`：账号元数据
 
-Recording downloads always produce a decrypted `.ts` file first, then try to remux it to `.mp4`.
-Use `--no-remux` to keep only the `.ts` output.
-Use `--no-progress` to suppress the segment progress line.
-The final JSON payload includes validation metadata for the downloaded artifacts.
+密码不会写进这些 JSON 文件；在 macOS 上，账号密码保存在系统 Keychain 中。
 
-## Friendly command patterns
+## 文档
 
-```bash
-pkucw login
-pkucw ls
-pkucw use "有机化学 (一)"
-pkucw current
-pkucw info
-pkucw recordings list
-pkucw recordings latest
-pkucw contents list
-pkucw announcements show "课程群二维码"
-pkucw assignments submit "L4作业提交入口" --text "draft body" --save-draft
-```
-
-Once `pkucw use <course>` has been run, most course-aware commands can omit the course argument.
-
-## Shell completion
-
-Quick one-off setup:
-
-```bash
-eval "$(pkucw completion zsh)"
-```
-
-The installer already writes a persistent completion hook for the current shell on macOS and other common SSH targets.
-
-## Credentials discovery
-
-`pkucw login` looks for credentials in this order:
-
-1. `--credentials-file`
-2. `COURSEWEB_CREDENTIALS_FILE`
-3. The nearest `env.md` found by walking upward from the current working directory
-
-The credentials file format is:
-
-```text
-line 1: username
-line 2: password
-```
-
-You can override it with:
-
-```bash
-COURSEWEB_HOME=/custom/path pkucw status
-```
+- [使用说明](docs/overview.md)
+- [架构说明](docs/architecture.md)
+- [账号管理](docs/account-management.md)
+- [技术报告](docs/technical-report.md)

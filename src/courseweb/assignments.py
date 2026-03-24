@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+import re
+import ssl
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
@@ -12,6 +17,31 @@ from .courses import CourseInfo, CourseRecord, CourseScrapeError, scrape_course_
 
 class AssignmentScrapeError(RuntimeError):
     """Raised when assignment scraping cannot complete."""
+
+
+FILE_NAME_RE = re.compile(r'filename\\*?=(?:UTF-8\'\')?"?([^\";]+)"?')
+INVALID_PATH_CHARS_RE = re.compile(r'[\\\\/:*?"<>|]+')
+CONTENT_TYPE_SUFFIXES = {
+    "application/pdf": ".pdf",
+    "application/zip": ".zip",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/msword": ".doc",
+    "text/plain": ".txt",
+}
+
+
+@dataclass(slots=True)
+class AssignmentAsset:
+    label: str
+    url: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "url": self.url,
+        }
 
 
 @dataclass(slots=True)
@@ -47,6 +77,8 @@ class AssignmentDetail:
     supports_library_upload: bool
     supports_comment: bool
     instructions: list[str]
+    instructions_html: str | None
+    attachments: list[AssignmentAsset]
     submitted_files: list[str]
 
     def to_dict(self) -> dict[str, Any]:
@@ -62,7 +94,25 @@ class AssignmentDetail:
             "supports_library_upload": self.supports_library_upload,
             "supports_comment": self.supports_comment,
             "instructions": self.instructions,
+            "instructions_html": self.instructions_html,
+            "attachments": [asset.to_dict() for asset in self.attachments],
             "submitted_files": self.submitted_files,
+        }
+
+
+@dataclass(slots=True)
+class AssignmentDownloadResult:
+    item: AssignmentItem
+    output_path: str
+    summary_path: str | None
+    downloaded_files: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "assignment": self.item.to_dict(),
+            "output_path": self.output_path,
+            "summary_path": self.summary_path,
+            "downloaded_files": self.downloaded_files,
         }
 
 
@@ -160,9 +210,9 @@ def scrape_assignments(
             context.close()
             browser.close()
     except PlaywrightTimeoutError as exc:
-        raise AssignmentScrapeError(f"Timed out while loading assignments: {exc}") from exc
+        raise AssignmentScrapeError(f"加载课程作业页面超时：{exc}") from exc
     except Exception as exc:  # pragma: no cover - operational fallback
-        raise AssignmentScrapeError(f"Could not scrape assignments: {exc}") from exc
+        raise AssignmentScrapeError(f"抓取课程作业失败：{exc}") from exc
 
     items = [
         AssignmentItem(
@@ -198,6 +248,8 @@ def scrape_assignment_detail(
             supports_library_upload=False,
             supports_comment=False,
             instructions=[],
+            instructions_html=None,
+            attachments=[],
             submitted_files=[],
         )
 
@@ -245,6 +297,9 @@ def scrape_assignment_detail(
                   }
 
                   const instructionNodes = [];
+                  const instructionHtmlNode = reviewMode
+                    ? document.querySelector('#contentDetails .vtbegenerated, #contentDetails')
+                    : document.querySelector('#instructions .vtbegenerated, #instructions, #stepcontent1 .vtbegenerated');
                   const instructionCandidates = reviewMode
                     ? document.querySelectorAll('#contentDetails .vtbegenerated, #contentDetails p, #contentDetails li')
                     : document.querySelectorAll('#instructions .vtbegenerated, #instructions p, #instructions li, #stepcontent1 .vtbegenerated');
@@ -253,6 +308,21 @@ def scrape_assignment_detail(
                     if (!snippet) continue;
                     if (instructionNodes.indexOf(snippet) !== -1) continue;
                     instructionNodes.push(snippet);
+                  }
+
+                  const attachmentEntries = [];
+                  const attachmentCandidates = reviewMode
+                    ? document.querySelectorAll('#contentDetails a, #assignmentInfo a, a')
+                    : document.querySelectorAll('#instructions a, #stepcontent1 a, a');
+                  for (let i = 0; i < attachmentCandidates.length; i += 1) {
+                    const node = attachmentCandidates[i];
+                    const href = node.href || '';
+                    const label = readText(node);
+                    if (!href) continue;
+                    if (!/bbcswebdav|download|attachment/i.test(href)) continue;
+                    if (!label) continue;
+                    if (attachmentEntries.find((entry) => entry.href === href)) continue;
+                    attachmentEntries.push({ label, href });
                   }
 
                   const reviewFiles = [...document.querySelectorAll('#currentAttempt_submissionList a')]
@@ -293,6 +363,8 @@ def scrape_assignment_detail(
                       !reviewMode &&
                       !!document.querySelector('textarea[name="student_commentstext"], textarea[name*="comment"], textarea[id*="comment"]'),
                     instructions: instructionNodes.slice(0, 12),
+                    instructions_html: instructionHtmlNode ? instructionHtmlNode.innerHTML : null,
+                    attachments: attachmentEntries,
                     submitted_files: submittedFiles,
                   };
                 }
@@ -302,9 +374,9 @@ def scrape_assignment_detail(
             context.close()
             browser.close()
     except PlaywrightTimeoutError as exc:
-        raise AssignmentScrapeError(f"Timed out while loading assignment detail: {exc}") from exc
+        raise AssignmentScrapeError(f"加载作业详情超时：{exc}") from exc
     except Exception as exc:  # pragma: no cover - operational fallback
-        raise AssignmentScrapeError(f"Could not scrape assignment detail: {exc}") from exc
+        raise AssignmentScrapeError(f"抓取作业详情失败：{exc}") from exc
 
     page_title = raw["page_title"]
     mode = "review" if page_title.startswith("复查提交历史记录") else "submit"
@@ -329,7 +401,69 @@ def scrape_assignment_detail(
         supports_library_upload=raw["supports_library_upload"],
         supports_comment=raw["supports_comment"],
         instructions=instructions,
+        instructions_html=raw.get("instructions_html"),
+        attachments=[AssignmentAsset(label=entry["label"], url=entry["href"]) for entry in raw.get("attachments", [])],
         submitted_files=submitted_files,
+    )
+
+
+def download_assignment(
+    *,
+    storage_state_path: str,
+    item: AssignmentItem,
+    output_path: str | None = None,
+    headless: bool = True,
+    timeout_ms: int = 30000,
+    timeout_seconds: int = 60,
+) -> AssignmentDownloadResult:
+    if item.type == "assignment-file":
+        target_path = Path(output_path).expanduser().resolve() if output_path else Path.cwd() / _safe_name(item.title)
+        if target_path.exists() and target_path.is_dir():
+            target_path = target_path / _safe_name(item.title)
+        saved_path = _download_file(
+            storage_state_path=storage_state_path,
+            url=item.url,
+            destination=target_path,
+            timeout_seconds=timeout_seconds,
+        )
+        return AssignmentDownloadResult(
+            item=item,
+            output_path=str(saved_path),
+            summary_path=None,
+            downloaded_files=[str(saved_path)],
+        )
+
+    detail = scrape_assignment_detail(
+        storage_state_path=storage_state_path,
+        item=item,
+        headless=headless,
+        timeout_ms=timeout_ms,
+    )
+
+    target_dir = Path(output_path).expanduser().resolve() if output_path else Path.cwd() / _safe_name(item.title)
+    if target_dir.suffix:
+        target_dir = target_dir.parent / target_dir.stem
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_path = target_dir / "作业说明.md"
+    summary_path.write_text(_assignment_summary_markdown(detail), encoding="utf-8")
+
+    downloaded_files = [str(summary_path)]
+    attachment_dir = target_dir / "附件"
+    for asset in detail.attachments:
+        saved_path = _download_file(
+            storage_state_path=storage_state_path,
+            url=asset.url,
+            destination=attachment_dir / _safe_name(asset.label),
+            timeout_seconds=timeout_seconds,
+        )
+        downloaded_files.append(str(saved_path))
+
+    return AssignmentDownloadResult(
+        item=item,
+        output_path=str(target_dir),
+        summary_path=str(summary_path),
+        downloaded_files=downloaded_files,
     )
 
 
@@ -364,10 +498,10 @@ def submit_assignment(
     timeout_ms: int = 30000,
 ) -> AssignmentSubmissionResult:
     if item.type != "blackboard-assignment":
-        raise AssignmentScrapeError("Only Blackboard-native assignments can be submitted.")
+        raise AssignmentScrapeError("当前仅支持提交 Blackboard 站内原生作业。")
 
     if action not in {"save", "submit"}:
-        raise AssignmentScrapeError(f"Unsupported submission action: {action}")
+        raise AssignmentScrapeError(f"不支持的作业提交动作：{action}")
 
     file_list = files or []
     blank_text_html = "<p></p>"
@@ -377,9 +511,15 @@ def submit_assignment(
             context = browser.new_context(storage_state=storage_state_path, ignore_https_errors=True)
             page = context.new_page()
             page.goto(item.url, wait_until="domcontentloaded", timeout=timeout_ms)
-            if page.title().startswith("复查提交历史记录") and page.locator('input[name="bottom_继续"]').count():
-                with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
-                    page.locator('input[name="bottom_继续"]').click()
+            if page.title().startswith("复查提交历史记录"):
+                continue_button = page.locator('input[name="bottom_继续"]')
+                if continue_button.count():
+                    with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
+                        continue_button.click()
+                elif not page.locator("form#uploadAssignmentFormId").count():
+                    raise AssignmentScrapeError(
+                        "该作业当前处于只读复查状态，未发现重新提交入口，可能已经截止、已评分或不允许再次提交。"
+                    )
             page.wait_for_selector("form#uploadAssignmentFormId", state="attached", timeout=timeout_ms)
             page.wait_for_function(
                 "() => !!(window.newFile_FilePickerObject && typeof window.newFile_FilePickerObject.submitFormUsingAjax === 'function')",
@@ -493,16 +633,16 @@ def submit_assignment(
             ok = response_status < 400 and "失败" not in page_text_excerpt and "重试" not in page_text_excerpt
             note = None
             if action == "save":
-                note = "Draft save was attempted against the live teaching site."
+                note = "已对真实教学网站执行草稿保存尝试。"
             elif action == "submit":
-                note = "Final submit was attempted against the live teaching site."
+                note = "已对真实教学网站执行最终提交尝试。"
 
             context.close()
             browser.close()
     except PlaywrightTimeoutError as exc:
-        raise AssignmentScrapeError(f"Timed out while submitting assignment: {exc}") from exc
+        raise AssignmentScrapeError(f"提交作业时超时：{exc}") from exc
     except Exception as exc:  # pragma: no cover - operational fallback
-        raise AssignmentScrapeError(f"Could not submit assignment: {exc}") from exc
+        raise AssignmentScrapeError(f"提交作业失败：{exc}") from exc
 
     return AssignmentSubmissionResult(
         item=item,
@@ -544,3 +684,98 @@ def _parse_identifier(url: str) -> str | None:
                     tail = tail.split(sep, 1)[0]
             return tail
     return None
+
+
+def _assignment_summary_markdown(detail: AssignmentDetail) -> str:
+    lines = [
+        f"# {detail.item.title}",
+        "",
+        f"- 作业 ID：{detail.item.id or '无'}",
+        f"- 类型：{detail.item.type}",
+        f"- 页面模式：{detail.mode}",
+        f"- 截止时间：{detail.due_at or '未知'}",
+        f"- 分值：{detail.points_possible or '未知'}",
+        f"- 当前成绩：{detail.current_grade or '暂无'}",
+        f"- 支持文本提交：{'是' if detail.supports_text else '否'}",
+        f"- 支持文件上传：{'是' if detail.supports_file_upload else '否'}",
+        f"- 支持资源库上传：{'是' if detail.supports_library_upload else '否'}",
+        f"- 支持备注：{'是' if detail.supports_comment else '否'}",
+        "",
+        "## 作业说明",
+        "",
+    ]
+    if detail.instructions:
+        for text in detail.instructions:
+            lines.append(f"- {text}")
+    else:
+        lines.append("暂无可解析的作业说明。")
+
+    lines.extend(["", "## 附件", ""])
+    if detail.attachments:
+        for asset in detail.attachments:
+            lines.append(f"- {asset.label}")
+            lines.append(f"  - {asset.url}")
+    else:
+        lines.append("暂无附件。")
+
+    return "\n".join(lines) + "\n"
+
+
+def _safe_name(value: str) -> str:
+    cleaned = INVALID_PATH_CHARS_RE.sub("_", value).strip().rstrip(".")
+    return cleaned or "download"
+
+
+def _download_file(
+    *,
+    storage_state_path: str,
+    url: str,
+    destination: Path,
+    timeout_seconds: int,
+) -> Path:
+    cookies = _cookie_header_for_url(storage_state_path, url)
+    headers = {
+        "Cookie": cookies,
+        "User-Agent": "courseweb-cli/0.1",
+    }
+    request = Request(url, headers=headers)
+    ssl_context = ssl._create_unverified_context()
+    with urlopen(request, timeout=timeout_seconds, context=ssl_context) as response:
+        final_destination = destination
+        content_disposition = response.headers.get("Content-Disposition", "")
+        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        inferred_name = _filename_from_content_disposition(content_disposition)
+        if destination.suffix == "" and inferred_name:
+            final_destination = destination.with_name(_safe_name(inferred_name))
+        elif destination.suffix == "" and content_type in CONTENT_TYPE_SUFFIXES:
+            final_destination = destination.with_name(destination.name + CONTENT_TYPE_SUFFIXES[content_type])
+        final_destination.parent.mkdir(parents=True, exist_ok=True)
+        final_destination.write_bytes(response.read())
+    return final_destination
+
+
+def _cookie_header_for_url(storage_state_path: str, url: str) -> str:
+    data = json.loads(Path(storage_state_path).read_text())
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    path = parsed.path or "/"
+    cookies = []
+    for cookie in data.get("cookies", []):
+        domain = str(cookie.get("domain") or "")
+        if not host.endswith(domain.lstrip(".")):
+            continue
+        cookie_path = str(cookie.get("path") or "/")
+        if not path.startswith(cookie_path):
+            continue
+        cookies.append(f"{cookie['name']}={cookie['value']}")
+    return "; ".join(cookies)
+
+
+def _filename_from_content_disposition(header: str) -> str | None:
+    if not header:
+        return None
+    match = FILE_NAME_RE.search(header)
+    if not match:
+        return None
+    name = match.group(1).strip()
+    return name.replace("%20", " ")

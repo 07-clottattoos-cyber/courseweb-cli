@@ -10,8 +10,14 @@ run() {
   "$@"
 }
 
+run_quiet() {
+  echo
+  echo "+ $*"
+  "$@" >/dev/null
+}
+
 run "${COURSEWEB_BIN}" --version
-run "${COURSEWEB_BIN}" doctor --json
-run "${COURSEWEB_BIN}" completion zsh >/dev/null
-run "${COURSEWEB_BIN}" --help >/dev/null
-run "${COURSEWEB_BIN}" recordings --help >/dev/null
+run_quiet "${COURSEWEB_BIN}" doctor --json
+run_quiet "${COURSEWEB_BIN}" completion zsh
+run_quiet "${COURSEWEB_BIN}" --help
+run_quiet "${COURSEWEB_BIN}" recordings --help
