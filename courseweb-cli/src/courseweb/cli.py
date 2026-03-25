@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -32,6 +33,7 @@ from .courses import (
     CourseRecord,
     CourseScrapeError,
     resolve_course,
+    resolve_course_matches,
     scrape_course_info,
     scrape_courses,
     suggest_courses,
@@ -75,7 +77,7 @@ class ChineseArgumentParser(argparse.ArgumentParser):
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_normalize_agent_argv(argv))
 
     if not hasattr(args, "handler"):
         parser.print_help()
@@ -97,6 +99,115 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     return 0 if result.ok else 1
+
+
+_RESOURCE_COMMANDS = {
+    "announcements": {"list", "ls", "show", "get"},
+    "contents": {"list", "ls", "tree", "show", "get", "download", "dl"},
+    "assignments": {"list", "ls", "show", "get", "download", "dl", "submit"},
+    "recordings": {"list", "ls", "show", "get", "download", "dl", "download-latest", "latest"},
+}
+_RESOURCE_ORDERED_DEFAULTS = {"announcements", "contents", "assignments", "recordings"}
+_LESSON_ALIASES = {"lesson", "lessons"}
+_RESOURCE_ALIASES = {
+    "announcements": ["notice", "notices", "announcement", "notification", "notifications"],
+    "contents": ["content", "material", "materials"],
+    "recordings": ["recording", "video", "videos"],
+}
+_SINGULAR_RESOURCE_ALIASES = {
+    "content": "contents",
+    "material": "contents",
+    "materials": "contents",
+    "recording": "recordings",
+    "video": "recordings",
+    "videos": "recordings",
+}
+_RECORDING_TYPE_ALIASES = {"recording", "recordings", "video", "videos"}
+
+
+def _normalize_agent_argv(argv: list[str] | None) -> list[str]:
+    tokens = list(argv if argv is not None else sys.argv[1:])
+    if not tokens:
+        return tokens
+
+    if tokens[0] in {"notice", "notices", "announcement", "notification", "notifications"}:
+        tokens[0] = "announcements"
+    elif tokens[0] in _SINGULAR_RESOURCE_ALIASES:
+        tokens[0] = _SINGULAR_RESOURCE_ALIASES[tokens[0]]
+
+    if tokens[0] in _LESSON_ALIASES:
+        tokens[0] = "contents"
+
+    tokens = _normalize_recording_type_route(tokens)
+
+    if tokens[0] in _RESOURCE_ORDERED_DEFAULTS:
+        return _normalize_resource_form(tokens[0], tokens[1:], prefix=[tokens[0]])
+
+    if len(tokens) >= 2 and tokens[0] == "course" and tokens[1] in _RESOURCE_ORDERED_DEFAULTS:
+        normalized_tail = _normalize_resource_tail(tokens[1], tokens[2:])
+        return ["course", tokens[1], *normalized_tail]
+
+    if len(tokens) >= 3 and tokens[0] == "course" and tokens[2] in _RESOURCE_ORDERED_DEFAULTS:
+        course_query = tokens[1]
+        normalized_tail = _normalize_resource_tail(tokens[2], tokens[3:])
+        if not normalized_tail:
+            normalized_tail = ["list"]
+        return ["course", tokens[2], normalized_tail[0], course_query, *normalized_tail[1:]]
+
+    return tokens
+
+
+def _normalize_recording_type_route(tokens: list[str]) -> list[str]:
+    if not tokens:
+        return tokens
+    if tokens[0] != "contents":
+        return tokens
+    if "--type" not in tokens:
+        return tokens
+    try:
+        type_index = tokens.index("--type")
+        type_value = tokens[type_index + 1].strip().lower()
+    except (ValueError, IndexError):
+        return tokens
+    if type_value not in _RECORDING_TYPE_ALIASES:
+        return tokens
+
+    rewritten = [token for i, token in enumerate(tokens) if i not in {type_index, type_index + 1}]
+    rewritten[0] = "recordings"
+    if len(rewritten) == 1:
+        rewritten.append("list")
+    return rewritten
+
+
+def _normalize_resource_form(resource: str, tail: list[str], *, prefix: list[str]) -> list[str]:
+    normalized_tail = _normalize_resource_tail(resource, tail)
+    return [*prefix, *normalized_tail]
+
+
+def _normalize_resource_tail(resource: str, tail: list[str]) -> list[str]:
+    if not tail:
+        return ["list"]
+
+    known_commands = _RESOURCE_COMMANDS[resource]
+    first = tail[0]
+    second = tail[1] if len(tail) > 1 else None
+
+    if first in {"-h", "--help"}:
+        return tail
+
+    if first in _LESSON_ALIASES:
+        first = "contents"
+
+    if first in known_commands:
+        return [first, *tail[1:]]
+
+    if first.startswith("-"):
+        return ["list", *tail]
+
+    if second in known_commands:
+        return [second, first, *tail[2:]]
+
+    return ["list", *tail]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -149,6 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_context_parsers(subparsers, shared_parser)
     add_course_parsers(subparsers, shared_parser)
     add_top_level_course_resource_parsers(subparsers, shared_parser)
+    add_agent_compat_parsers(subparsers, shared_parser)
 
     return parser
 
@@ -336,6 +448,14 @@ def add_auth_shortcuts(
     status_parser.set_defaults(handler=handle_auth_status)
 
 
+def _add_optional_course_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--course",
+        dest="course_option",
+        help="通过旗标显式指定课程；可与位置参数二选一。",
+    )
+
+
 def add_courses_parsers(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     shared_parser: argparse.ArgumentParser,
@@ -346,6 +466,7 @@ def add_courses_parsers(
         parents=[shared_parser],
     )
     courses_subparsers = courses_parser.add_subparsers(dest="courses_command")
+    courses_parser.set_defaults(handler=handle_courses_list)
 
     list_parser = courses_subparsers.add_parser(
         "list",
@@ -355,6 +476,8 @@ def add_courses_parsers(
     )
     list_parser.add_argument("--current", action="store_true", help="只显示当前学期课程。")
     list_parser.add_argument("--archived", action="store_true", help="只显示历史课程。")
+    list_parser.add_argument("--search", help="按课程标题、ID 或学期筛选课程。")
+    list_parser.add_argument("query", nargs="?", help=argparse.SUPPRESS)
     list_parser.set_defaults(handler=handle_courses_list)
 
     show_parser = courses_subparsers.add_parser(
@@ -385,6 +508,8 @@ def add_context_parsers(
     )
     ls_parser.add_argument("--current", action="store_true", help="只显示当前学期课程。")
     ls_parser.add_argument("--archived", action="store_true", help="只显示历史课程。")
+    ls_parser.add_argument("--search", help="按课程标题、ID 或学期筛选课程。")
+    ls_parser.add_argument("query", nargs="?", help=argparse.SUPPRESS)
     ls_parser.set_defaults(handler=handle_courses_list)
 
     use_parser = subparsers.add_parser(
@@ -420,6 +545,18 @@ def add_course_parsers(
         parents=[shared_parser],
     )
     course_subparsers = course_parser.add_subparsers(dest="course_command")
+
+    course_list_parser = course_subparsers.add_parser(
+        "list",
+        help=argparse.SUPPRESS,
+        aliases=["ls"],
+        parents=[shared_parser],
+    )
+    course_list_parser.add_argument("--current", action="store_true", help=argparse.SUPPRESS)
+    course_list_parser.add_argument("--archived", action="store_true", help=argparse.SUPPRESS)
+    course_list_parser.add_argument("--search", help=argparse.SUPPRESS)
+    course_list_parser.add_argument("query", nargs="?", help=argparse.SUPPRESS)
+    course_list_parser.set_defaults(handler=handle_courses_list)
 
     info_parser = course_subparsers.add_parser(
         "info",
@@ -475,8 +612,16 @@ def add_named_resource_parsers(
     parser = course_subparsers.add_parser(
         name,
         help=f"管理{resource_label}。",
+        aliases=_RESOURCE_ALIASES.get(name, []),
         parents=[shared_parser],
     )
+    _add_optional_course_argument(parser)
+    if name == "announcements":
+        parser.add_argument(
+            "--limit",
+            type=int,
+            help="只返回前 N 条通知；未提供时返回全部通知。",
+        )
     subparsers = parser.add_subparsers(dest=f"{name}_command")
 
     list_parser = subparsers.add_parser(
@@ -486,12 +631,22 @@ def add_named_resource_parsers(
         parents=[shared_parser],
     )
     list_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(list_parser)
+    if name == "announcements":
+        list_parser.add_argument(
+            "--limit",
+            type=int,
+            help="只返回前 N 条通知；未提供时返回全部通知。",
+        )
     if name == "assignments":
         list_parser.set_defaults(handler=handle_course_assignments_list)
+        parser.set_defaults(handler=handle_course_assignments_list, course=None)
     elif name == "announcements":
         list_parser.set_defaults(handler=handle_course_announcements_list)
+        parser.set_defaults(handler=handle_course_announcements_list, course=None)
     elif name == "contents":
         list_parser.set_defaults(handler=handle_course_contents_list)
+        parser.set_defaults(handler=handle_course_contents_list, course=None)
     else:
         list_parser.set_defaults(
             handler=make_placeholder_handler(
@@ -507,6 +662,7 @@ def add_named_resource_parsers(
             parents=[shared_parser],
         )
         tree_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+        _add_optional_course_argument(tree_parser)
         tree_parser.set_defaults(handler=handle_course_contents_tree)
 
         show_parser = subparsers.add_parser(
@@ -516,6 +672,7 @@ def add_named_resource_parsers(
             parents=[shared_parser],
         )
         show_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+        _add_optional_course_argument(show_parser)
         show_parser.add_argument("content", help="教学内容 ID 或标题片段。")
         show_parser.set_defaults(handler=handle_course_contents_show)
 
@@ -526,11 +683,22 @@ def add_named_resource_parsers(
             parents=[shared_parser],
         )
         download_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+        _add_optional_course_argument(download_parser)
         download_parser.add_argument("content", help="教学内容 ID 或标题片段。")
         download_parser.add_argument(
             "--output",
             type=Path,
             help="下载文件或文件夹的可选输出路径。",
+        )
+        download_parser.add_argument(
+            "--output-dir",
+            type=Path,
+            help="仅指定输出目录；会自动使用教学内容标题生成文件名。",
+        )
+        download_parser.add_argument(
+            "--dest",
+            type=Path,
+            help=argparse.SUPPRESS,
         )
         download_parser.set_defaults(handler=handle_course_contents_download)
         return
@@ -542,6 +710,7 @@ def add_named_resource_parsers(
         parents=[shared_parser],
     )
     show_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(show_parser)
     show_parser.add_argument(name[:-1], help=f"{singular_label} ID 或标题片段。")
     if name == "assignments":
         show_parser.set_defaults(handler=handle_course_assignments_show)
@@ -563,11 +732,22 @@ def add_named_resource_parsers(
             parents=[shared_parser],
         )
         download_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+        _add_optional_course_argument(download_parser)
         download_parser.add_argument("assignment", help="作业 ID 或标题片段。")
         download_parser.add_argument(
             "--output",
             type=Path,
             help="下载目录或输出前缀；默认使用作业标题创建目录。",
+        )
+        download_parser.add_argument(
+            "--output-dir",
+            type=Path,
+            help="仅指定输出目录；会自动使用作业标题创建目录。",
+        )
+        download_parser.add_argument(
+            "--dest",
+            type=Path,
+            help=argparse.SUPPRESS,
         )
         download_parser.set_defaults(handler=handle_course_assignments_download)
 
@@ -577,6 +757,7 @@ def add_named_resource_parsers(
             parents=[shared_parser],
         )
         submit_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+        _add_optional_course_argument(submit_parser)
         submit_parser.add_argument("assignment", help="作业 ID 或标题片段。")
         submit_parser.add_argument("--file", type=Path, action="append", default=[], help="要上传的文件。")
         submit_parser.add_argument(
@@ -627,7 +808,9 @@ def add_recording_parsers(
         help="管理课堂实录。",
         parents=[shared_parser],
     )
+    _add_optional_course_argument(parser)
     subparsers = parser.add_subparsers(dest="recordings_command")
+    parser.set_defaults(handler=handle_course_recordings_list, course=None)
 
     list_parser = subparsers.add_parser(
         "list",
@@ -636,6 +819,7 @@ def add_recording_parsers(
         parents=[shared_parser],
     )
     list_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(list_parser)
     list_parser.set_defaults(handler=handle_course_recordings_list)
 
     show_parser = subparsers.add_parser(
@@ -645,6 +829,7 @@ def add_recording_parsers(
         parents=[shared_parser],
     )
     show_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(show_parser)
     show_parser.add_argument("recording", help="课堂实录 ID 或标题片段。")
     show_parser.set_defaults(handler=handle_course_recordings_show)
 
@@ -655,8 +840,19 @@ def add_recording_parsers(
         parents=[shared_parser],
     )
     download_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(download_parser)
     download_parser.add_argument("recording", help="课堂实录 ID 或标题片段。")
     download_parser.add_argument("--output", type=Path, help="可选输出路径。")
+    download_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="仅指定输出目录；会自动使用课堂实录标题生成文件名。",
+    )
+    download_parser.add_argument(
+        "--dest",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
     download_parser.add_argument(
         "--no-remux",
         action="store_true",
@@ -676,7 +872,18 @@ def add_recording_parsers(
         parents=[shared_parser],
     )
     latest_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(latest_parser)
     latest_parser.add_argument("--output", type=Path, help="可选输出路径。")
+    latest_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="仅指定输出目录；会自动使用课堂实录标题生成文件名。",
+    )
+    latest_parser.add_argument(
+        "--dest",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
     latest_parser.add_argument(
         "--no-remux",
         action="store_true",
@@ -688,6 +895,146 @@ def add_recording_parsers(
         help="不在 stderr 中显示分片下载进度。",
     )
     latest_parser.set_defaults(handler=handle_course_recordings_download_latest)
+
+
+def add_agent_compat_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    shared_parser: argparse.ArgumentParser,
+) -> None:
+    content_parser = subparsers.add_parser(
+        "download-content",
+        help=argparse.SUPPRESS,
+        parents=[shared_parser],
+    )
+    content_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(content_parser)
+    content_parser.add_argument("content", help="教学内容 ID 或标题片段。")
+    content_parser.add_argument("--output", type=Path, help="下载文件或文件夹的可选输出路径。")
+    content_parser.add_argument("--output-dir", type=Path, help="仅指定输出目录；会自动使用教学内容标题生成文件名。")
+    content_parser.add_argument("--dest", type=Path, help="`--output-dir` 的兼容别名。")
+    content_parser.set_defaults(handler=handle_download_content_shortcut)
+
+    recording_parser = subparsers.add_parser(
+        "download-recording",
+        help=argparse.SUPPRESS,
+        parents=[shared_parser],
+    )
+    recording_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(recording_parser)
+    recording_parser.add_argument("recording", nargs="?", help="课堂实录 ID 或标题片段。")
+    recording_parser.add_argument("--latest", action="store_true", help="下载最新一条课堂实录。")
+    recording_parser.add_argument("--output", type=Path, help="可选输出路径。")
+    recording_parser.add_argument("--output-dir", type=Path, help="仅指定输出目录；会自动使用课堂实录标题生成文件名。")
+    recording_parser.add_argument("--dest", type=Path, help="`--output-dir` 的兼容别名。")
+    recording_parser.add_argument("--no-remux", action="store_true", help="保留 .ts 文件并跳过 mp4 转封装。")
+    recording_parser.add_argument("--no-progress", action="store_true", help="不显示分片下载进度。")
+    recording_parser.set_defaults(handler=handle_download_recording_shortcut)
+
+    latest_recording_parser = subparsers.add_parser(
+        "download-latest-recording",
+        help=argparse.SUPPRESS,
+        aliases=["latest-recording"],
+        parents=[shared_parser],
+    )
+    latest_recording_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(latest_recording_parser)
+    latest_recording_parser.add_argument("--output", type=Path, help="可选输出路径。")
+    latest_recording_parser.add_argument("--output-dir", type=Path, help="仅指定输出目录；会自动使用课堂实录标题生成文件名。")
+    latest_recording_parser.add_argument("--dest", type=Path, help="`--output-dir` 的兼容别名。")
+    latest_recording_parser.add_argument(
+        "--no-remux",
+        action="store_true",
+        help="保留 .ts 文件并跳过 mp4 转封装。",
+    )
+    latest_recording_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="不显示分片下载进度。",
+    )
+    latest_recording_parser.set_defaults(
+        handler=handle_course_recordings_download_latest,
+        no_remux=True,
+        no_progress=True,
+    )
+
+    assignment_parser = subparsers.add_parser(
+        "download-assignment",
+        help=argparse.SUPPRESS,
+        parents=[shared_parser],
+    )
+    assignment_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(assignment_parser)
+    assignment_parser.add_argument("assignment", help="作业 ID 或标题片段。")
+    assignment_parser.add_argument("--output", type=Path, help="下载目录或输出前缀；默认使用作业标题创建目录。")
+    assignment_parser.add_argument("--output-dir", type=Path, help="仅指定输出目录；会自动使用作业标题创建目录。")
+    assignment_parser.add_argument("--dest", type=Path, help="`--output-dir` 的兼容别名。")
+    assignment_parser.set_defaults(handler=handle_course_assignments_download)
+
+    submit_parser = subparsers.add_parser(
+        "submit-assignment",
+        help=argparse.SUPPRESS,
+        parents=[shared_parser],
+    )
+    submit_parser.add_argument("course", nargs="?", help="课程 ID、短标识或标题片段。")
+    _add_optional_course_argument(submit_parser)
+    submit_parser.add_argument("assignment", help="作业 ID 或标题片段。")
+    submit_parser.add_argument("--file", type=Path, action="append", default=[], help="要上传的文件。")
+    submit_parser.add_argument("--replace-files", action="store_true", help="上传新文件前，先移除现有草稿附件。")
+    submit_parser.add_argument("--clear-files", action="store_true", help="移除现有草稿附件，但不新增文件。")
+    submit_parser.add_argument("--text", help="文本提交内容。")
+    submit_parser.add_argument("--clear-text", action="store_true", help="清空当前草稿中的文本提交内容。")
+    submit_parser.add_argument("--comment", help="可选提交备注。")
+    submit_parser.add_argument("--clear-comment", action="store_true", help="清空当前草稿备注。")
+    submit_parser.add_argument("--final-submit", action="store_true", help="执行真实最终提交，而不是仅保存草稿。")
+    submit_parser.add_argument("--confirm-final-submit", help="`--final-submit` 的二次确认，必须与作业 ID 或标题完全一致。")
+    submit_parser.add_argument("--save-draft", action="store_true", help="执行真实草稿保存。")
+    submit_parser.set_defaults(handler=handle_assignment_submit)
+
+    list_courses_parser = subparsers.add_parser(
+        "list-courses",
+        help=argparse.SUPPRESS,
+        parents=[shared_parser],
+    )
+    list_courses_parser.add_argument("--current", action="store_true", help=argparse.SUPPRESS)
+    list_courses_parser.add_argument("--archived", action="store_true", help=argparse.SUPPRESS)
+    list_courses_parser.add_argument("--search", help=argparse.SUPPRESS)
+    list_courses_parser.add_argument("query", nargs="?", help=argparse.SUPPRESS)
+    list_courses_parser.set_defaults(handler=handle_courses_list)
+
+
+def _normalize_output_path(args: argparse.Namespace) -> str | None:
+    output = getattr(args, "output", None)
+    if output:
+        return str(output.expanduser().resolve())
+
+    dest = getattr(args, "dest", None)
+    if dest:
+        resolved = dest.expanduser().resolve()
+        resolved.mkdir(parents=True, exist_ok=True)
+        return str(resolved)
+
+    output_dir = getattr(args, "output_dir", None)
+    if output_dir:
+        resolved = output_dir.expanduser().resolve()
+        resolved.mkdir(parents=True, exist_ok=True)
+        return str(resolved)
+
+    return None
+
+
+def _course_query(args: argparse.Namespace) -> str | None:
+    return getattr(args, "course_option", None) or getattr(args, "course", None)
+
+
+def handle_download_content_shortcut(args: argparse.Namespace) -> CommandResult:
+    args.domain = "contents"
+    return handle_course_contents_download(args)
+
+
+def handle_download_recording_shortcut(args: argparse.Namespace) -> CommandResult:
+    if getattr(args, "latest", False) or not getattr(args, "recording", None):
+        return handle_course_recordings_download_latest(args)
+    return handle_course_recordings_download(args)
 
 
 def handle_auth_login(args: argparse.Namespace) -> CommandResult:
@@ -834,7 +1181,7 @@ def handle_use_course(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1064,11 +1411,20 @@ def handle_courses_list(args: argparse.Namespace) -> CommandResult:
     elif args.archived and not args.current:
         filtered = [course for course in courses if course.status == "archived"]
 
+    query = (getattr(args, "search", None) or getattr(args, "query", None) or "").strip()
+    if query:
+        filtered = resolve_course_matches(filtered, query, limit=len(filtered) or 5)
+
     return CommandResult(
         ok=True,
-        message=f"已从教学网门户加载 {len(filtered)} 门课程。",
+        message=(
+            f"已筛选出 {len(filtered)} 门匹配课程。"
+            if query
+            else f"已从教学网门户加载 {len(filtered)} 门课程。"
+        ),
         payload={
             "count": len(filtered),
+            "query": query or None,
             "courses": [course.to_dict() for course in filtered],
         },
     )
@@ -1108,7 +1464,7 @@ def handle_course_info(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1134,7 +1490,7 @@ def handle_course_assignments_list(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1173,7 +1529,7 @@ def handle_course_assignments_show(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1239,7 +1595,7 @@ def handle_course_assignments_download(args: argparse.Namespace) -> CommandResul
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1272,7 +1628,7 @@ def handle_course_assignments_download(args: argparse.Namespace) -> CommandResul
         result = download_assignment(
             storage_state_path=session.storage_state or "",
             item=item,
-            output_path=str(args.output.expanduser().resolve()) if args.output else None,
+            output_path=_normalize_output_path(args),
             headless=True,
         )
     except AssignmentScrapeError as exc:
@@ -1306,7 +1662,7 @@ def handle_course_announcements_list(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1318,6 +1674,10 @@ def handle_course_announcements_list(args: argparse.Namespace) -> CommandResult:
         )
     except AnnouncementScrapeError as exc:
         return CommandResult(ok=False, message=str(exc), payload={})
+
+    limit = getattr(args, "limit", None)
+    if limit is not None and limit >= 0:
+        details = details[:limit]
 
     return CommandResult(
         ok=True,
@@ -1341,7 +1701,7 @@ def handle_course_announcements_show(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1387,7 +1747,7 @@ def handle_course_contents_list(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1423,7 +1783,7 @@ def handle_course_contents_tree(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1460,7 +1820,7 @@ def handle_course_contents_show(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1503,7 +1863,7 @@ def handle_course_contents_download(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1529,7 +1889,7 @@ def handle_course_contents_download(args: argparse.Namespace) -> CommandResult:
         result = download_content(
             storage_state_path=session.storage_state or "",
             item=item,
-            output_path=str(args.output.expanduser().resolve()) if args.output else None,
+            output_path=_normalize_output_path(args),
         )
     except ContentScrapeError as exc:
         return CommandResult(
@@ -1557,7 +1917,7 @@ def handle_course_recordings_list(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1592,7 +1952,7 @@ def handle_course_recordings_show(args: argparse.Namespace) -> CommandResult:
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1655,7 +2015,7 @@ def handle_course_recordings_download(args: argparse.Namespace) -> CommandResult
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1684,7 +2044,7 @@ def handle_course_recordings_download(args: argparse.Namespace) -> CommandResult
         result = download_recording(
             storage_state_path=session.storage_state or "",
             item=item,
-            output_path=str(args.output.expanduser().resolve()) if args.output else None,
+            output_path=_normalize_output_path(args),
             headless=True,
             timeout_ms=45000,
             remux_to_mp4=not args.no_remux,
@@ -1716,7 +2076,7 @@ def handle_course_recordings_download_latest(args: argparse.Namespace) -> Comman
     if auth_error is not None:
         return auth_error
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 
@@ -1742,7 +2102,7 @@ def handle_course_recordings_download_latest(args: argparse.Namespace) -> Comman
         result = download_recording(
             storage_state_path=session.storage_state or "",
             item=item,
-            output_path=str(args.output.expanduser().resolve()) if args.output else None,
+            output_path=_normalize_output_path(args),
             headless=True,
             timeout_ms=45000,
             remux_to_mp4=not args.no_remux,
@@ -1781,7 +2141,7 @@ def handle_assignment_submit(args: argparse.Namespace) -> CommandResult:
             ok=False,
             message="`--save-draft` 和 `--final-submit` 只能二选一。",
             payload={
-                "course": args.course,
+                "course": _course_query(args),
                 "assignment": args.assignment,
             },
         )
@@ -1791,7 +2151,7 @@ def handle_assignment_submit(args: argparse.Namespace) -> CommandResult:
             ok=False,
             message="`--confirm-final-submit` 只能和 `--final-submit` 一起使用。",
             payload={
-                "course": args.course,
+                "course": _course_query(args),
                 "assignment": args.assignment,
             },
         )
@@ -1801,7 +2161,7 @@ def handle_assignment_submit(args: argparse.Namespace) -> CommandResult:
             ok=False,
             message="`--replace-files` 至少需要一个 `--file`。",
             payload={
-                "course": args.course,
+                "course": _course_query(args),
                 "assignment": args.assignment,
             },
         )
@@ -1811,7 +2171,7 @@ def handle_assignment_submit(args: argparse.Namespace) -> CommandResult:
             ok=False,
             message="文件处理模式只能二选一：`--replace-files` 或 `--clear-files`。",
             payload={
-                "course": args.course,
+                "course": _course_query(args),
                 "assignment": args.assignment,
             },
         )
@@ -1821,7 +2181,7 @@ def handle_assignment_submit(args: argparse.Namespace) -> CommandResult:
             ok=False,
             message="文本模式只能二选一：`--text` 或 `--clear-text`。",
             payload={
-                "course": args.course,
+                "course": _course_query(args),
                 "assignment": args.assignment,
             },
         )
@@ -1831,7 +2191,7 @@ def handle_assignment_submit(args: argparse.Namespace) -> CommandResult:
             ok=False,
             message="备注模式只能二选一：`--comment` 或 `--clear-comment`。",
             payload={
-                "course": args.course,
+                "course": _course_query(args),
                 "assignment": args.assignment,
             },
         )
@@ -1852,12 +2212,12 @@ def handle_assignment_submit(args: argparse.Namespace) -> CommandResult:
             ok=False,
             message="作业提交至少需要提供 `--file`、`--text` 或 `--comment` 之一。",
             payload={
-                "course": args.course,
+                "course": _course_query(args),
                 "assignment": args.assignment,
             },
         )
 
-    course, error = _resolve_course_from_query(session, args.course)
+    course, error = _resolve_course_from_query(session, _course_query(args))
     if error is not None:
         return error
 

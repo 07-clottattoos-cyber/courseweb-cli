@@ -316,6 +316,7 @@ def download_recording(
         )
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_state = _init_download_checkpoint(total=len(playlist.segment_urls))
     with target_path.open("wb") as handle:
         for index, segment_url in enumerate(playlist.segment_urls):
             payload = _request_bytes(
@@ -336,6 +337,13 @@ def download_recording(
                     item=item,
                     index=index + 1,
                     total=len(playlist.segment_urls),
+                )
+            else:
+                _emit_download_checkpoint(
+                    item=item,
+                    index=index + 1,
+                    total=len(playlist.segment_urls),
+                    state=checkpoint_state,
                 )
 
     if show_progress:
@@ -612,6 +620,57 @@ def _emit_download_progress(*, item: RecordingItem, index: int, total: int) -> N
         file=sys.stderr,
         flush=True,
     )
+
+
+def _init_download_checkpoint(total: int) -> dict[str, float | int]:
+    now = time.monotonic()
+    return {
+        "started_at": now,
+        "last_emit_at": now,
+        "last_emit_index": 0,
+        "total": total,
+    }
+
+
+def _emit_download_checkpoint(
+    *,
+    item: RecordingItem,
+    index: int,
+    total: int,
+    state: dict[str, float | int],
+) -> None:
+    now = time.monotonic()
+    last_emit_at = float(state.get("last_emit_at", now))
+    last_emit_index = int(state.get("last_emit_index", 0))
+    should_emit = False
+
+    # Keep long-running agent workflows alive without spamming logs.
+    if index >= total:
+        should_emit = True
+    elif index == 1:
+        should_emit = True
+    elif index - last_emit_index >= 100:
+        should_emit = True
+    elif now - last_emit_at >= 20:
+        should_emit = True
+
+    if not should_emit:
+        return
+
+    started_at = float(state.get("started_at", now))
+    elapsed = max(now - started_at, 0.0)
+    percent = (index / total) * 100 if total else 100.0
+    print(
+        (
+            f"课堂回放下载中：{item.title} "
+            f"{index}/{total} 个分片（{percent:5.1f}%），"
+            f"已运行 {elapsed:0.1f}s"
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+    state["last_emit_at"] = now
+    state["last_emit_index"] = index
 
 
 def _detect_remux_tool() -> str | None:

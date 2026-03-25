@@ -13,22 +13,14 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from .courses import CourseInfo, CourseRecord, CourseScrapeError, scrape_course_info
+from .download_utils import resolve_download_destination, safe_download_name
 
 
 class ContentScrapeError(RuntimeError):
     """Raised when course content scraping cannot complete."""
 
 
-FILE_NAME_RE = re.compile(r'filename\\*?=(?:UTF-8\'\')?"?([^\";]+)"?')
 INVALID_PATH_CHARS_RE = re.compile(r'[\\\\/:*?"<>|]+')
-CONTENT_TYPE_SUFFIXES = {
-    "application/pdf": ".pdf",
-    "application/zip": ".zip",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-    "application/msword": ".doc",
-}
 
 
 @dataclass(slots=True)
@@ -353,7 +345,7 @@ def _parse_content_id(value: str | None) -> str | None:
 
 def _safe_name(value: str) -> str:
     cleaned = INVALID_PATH_CHARS_RE.sub("_", value).strip().rstrip(".")
-    return cleaned or "download"
+    return safe_download_name(cleaned)
 
 
 def _download_file(
@@ -371,16 +363,18 @@ def _download_file(
     request = Request(url, headers=headers)
     ssl_context = ssl._create_unverified_context()
     with urlopen(request, timeout=timeout_seconds, context=ssl_context) as response:
-        final_destination = destination
         content_disposition = response.headers.get("Content-Disposition", "")
         content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        inferred_name = _filename_from_content_disposition(content_disposition)
-        if destination.suffix == "" and inferred_name:
-            final_destination = destination.with_name(_safe_name(inferred_name))
-        elif destination.suffix == "" and content_type in CONTENT_TYPE_SUFFIXES:
-            final_destination = destination.with_name(destination.name + CONTENT_TYPE_SUFFIXES[content_type])
+        payload = response.read()
+        final_destination = resolve_download_destination(
+            destination=destination,
+            url=url,
+            content_disposition=content_disposition,
+            content_type=content_type,
+            payload=payload,
+        )
         final_destination.parent.mkdir(parents=True, exist_ok=True)
-        final_destination.write_bytes(response.read())
+        final_destination.write_bytes(payload)
     return final_destination
 
 
@@ -399,13 +393,3 @@ def _cookie_header_for_url(storage_state_path: str, url: str) -> str:
             continue
         cookies.append(f"{cookie['name']}={cookie['value']}")
     return "; ".join(cookies)
-
-
-def _filename_from_content_disposition(header: str) -> str | None:
-    if not header:
-        return None
-    match = FILE_NAME_RE.search(header)
-    if not match:
-        return None
-    name = match.group(1).strip()
-    return name.replace("%20", " ")

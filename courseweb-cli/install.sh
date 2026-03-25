@@ -145,6 +145,7 @@ fi
 "${VENV_DIR}/bin/python" -m playwright install chromium
 
 ln -sf "${VENV_DIR}/bin/pkucw" "${BIN_DIR}/pkucw"
+ln -sf "${VENV_DIR}/bin/pkucw-cli" "${BIN_DIR}/pkucw-cli"
 ln -sf "${VENV_DIR}/bin/courseweb" "${BIN_DIR}/courseweb"
 ln -sf "${VENV_DIR}/bin/cw" "${BIN_DIR}/cw"
 export PATH="${BIN_DIR}:${PATH}"
@@ -184,7 +185,7 @@ echo
 echo "Installed courseweb-cli."
 echo "  Python: ${PYTHON_BIN}"
 echo "  Venv:   ${VENV_DIR}"
-echo "  Bins:   ${BIN_DIR}/pkucw, ${BIN_DIR}/courseweb, ${BIN_DIR}/cw"
+echo "  Bins:   ${BIN_DIR}/pkucw, ${BIN_DIR}/pkucw-cli, ${BIN_DIR}/courseweb, ${BIN_DIR}/cw"
 echo "  Shell:  ${PROFILE_NOTE}"
 echo "  Finish: ${COMPLETION_NOTE}"
 

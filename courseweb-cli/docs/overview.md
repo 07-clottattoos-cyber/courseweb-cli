@@ -69,6 +69,13 @@ pkucw announcements list
 pkucw announcements show "公告标题片段"
 ```
 
+`pkucw announcements show` 不只是返回预览，它会返回：
+
+- 通知标题、发布时间、发帖者
+- `body_text`：完整正文文本
+- `body_html`：完整 HTML 正文
+- `asset_urls`：通知里的附件或图片链接
+
 ### 查看教学内容
 
 ```bash

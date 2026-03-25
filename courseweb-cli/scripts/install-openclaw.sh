@@ -9,6 +9,9 @@ OPENCLAW_WORKSPACE="${OPENCLAW_WORKSPACE:-${OPENCLAW_HOME}/workspace}"
 OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-${OPENCLAW_WORKSPACE}/skills}"
 OPENCLAW_SKILL_NAME="${OPENCLAW_SKILL_NAME:-pkucw-cli}"
 OPENCLAW_SKILL_TARGET="${OPENCLAW_SKILLS_DIR}/${OPENCLAW_SKILL_NAME}"
+OPENCLAW_EXTENSION_BIN_DIR="${OPENCLAW_HOME}/extensions/${OPENCLAW_SKILL_NAME}/bin"
+OPENCLAW_WORKSPACE_PKUCW="${OPENCLAW_WORKSPACE}/pkucw"
+OPENCLAW_WORKSPACE_PKUCW_CLI="${OPENCLAW_WORKSPACE}/pkucw-cli"
 
 PKUCW_SKIP_TOOL_INSTALL="${PKUCW_SKIP_TOOL_INSTALL:-0}"
 PKUCW_SKILL_INSTALL_MODE="${PKUCW_SKILL_INSTALL_MODE:-symlink}"
@@ -41,10 +44,24 @@ install_skill() {
   esac
 }
 
+install_extension_shims() {
+  mkdir -p "${OPENCLAW_EXTENSION_BIN_DIR}"
+  ln -sf "${PROJECT_DIR}/pkucw" "${OPENCLAW_EXTENSION_BIN_DIR}/pkucw"
+  ln -sf "${PROJECT_DIR}/pkucw-cli" "${OPENCLAW_EXTENSION_BIN_DIR}/pkucw-cli"
+}
+
+install_workspace_shims() {
+  mkdir -p "${OPENCLAW_WORKSPACE}"
+  ln -sf "${PROJECT_DIR}/pkucw" "${OPENCLAW_WORKSPACE_PKUCW}"
+  ln -sf "${PROJECT_DIR}/pkucw-cli" "${OPENCLAW_WORKSPACE_PKUCW_CLI}"
+}
+
 install_tool
 
 echo "Installing pkucw OpenClaw skill..."
 install_skill
+install_extension_shims
+install_workspace_shims
 
 echo
 echo "OpenClaw installation complete."
@@ -52,6 +69,8 @@ echo "  Project:       ${PROJECT_DIR}"
 echo "  Skill source:  ${SKILL_SOURCE_DIR}"
 echo "  Skill target:  ${OPENCLAW_SKILL_TARGET}"
 echo "  Skill mode:    ${PKUCW_SKILL_INSTALL_MODE}"
+echo "  Extension bin: ${OPENCLAW_EXTENSION_BIN_DIR}"
+echo "  Workspace bin: ${OPENCLAW_WORKSPACE_PKUCW}"
 
 if command -v pkucw >/dev/null 2>&1; then
   echo

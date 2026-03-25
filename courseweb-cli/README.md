@@ -137,6 +137,15 @@ pkucw recordings latest --output ./downloads/latest
 - 命令名保持稳定，不建议 agent 去猜课程名
 - 建议先 `pkucw ls --current --json`，再 `pkucw use "<精确课程名>" --json`
 - OpenClaw 可配合 [pkucw skill](skills/pkucw-cli/SKILL.md) 一起使用
+- 仓库根目录提供 `./pkucw` 和 `./pkucw-cli` 包装脚本，PATH 不稳定时 agent 可直接调用
+
+通知详情说明：
+
+- `pkucw announcements show "<通知标题片段>" --json` 会返回完整通知详情
+- 关键字段包括 `announcement.title`、`announcement.published_at`、`announcement.author`
+- `body_text` 是去标签后的正文全文
+- `body_html` 是原始 HTML 正文
+- `announcement.asset_urls` 会列出通知中的附件或图片链接
 
 ## 远程部署
 
